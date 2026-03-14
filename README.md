@@ -67,6 +67,11 @@ CMAKE_ARGS="-DGGML_METAL=on" pip install llama-cpp-python
 
 The project CI uses Python 3.12 because the upstream project documents prebuilt acceleration wheels for Python 3.10-3.12.
 
+CI uses the official extra index URLs from the upstream project:
+
+- CPU wheels: `https://abetlen.github.io/llama-cpp-python/whl/cpu`
+- Metal wheels: `https://abetlen.github.io/llama-cpp-python/whl/metal`
+
 ## CLI
 
 ### `almacode run`
@@ -158,4 +163,3 @@ python scripts/build_binary.py
 - `llama-cpp-python` official README: chat completions, JSON mode, hardware backends
 - `llama.cpp` official README: GGUF requirement and local model usage
 - GitHub Docs: protected branches and required status checks
-
