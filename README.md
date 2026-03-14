@@ -67,10 +67,12 @@ CMAKE_ARGS="-DGGML_METAL=on" pip install llama-cpp-python
 
 The project CI uses Python 3.12 because the upstream project documents prebuilt acceleration wheels for Python 3.10-3.12.
 
-CI uses the official extra index URLs from the upstream project:
+CI uses the official extra index URLs from the upstream project where that helps:
 
 - CPU wheels: `https://abetlen.github.io/llama-cpp-python/whl/cpu`
 - Metal wheels: `https://abetlen.github.io/llama-cpp-python/whl/metal`
+
+For Linux release artifacts, the project intentionally builds `llama-cpp-python` from source in CI instead of reusing the generic CPU wheel. That keeps the bundled `libllama.so` linked against the runner's normal glibc toolchain and avoids runtime failures caused by musl-linked binaries on standard desktop distributions.
 
 ## CLI
 
