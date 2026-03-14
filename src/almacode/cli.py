@@ -8,7 +8,7 @@ from rich.prompt import Prompt
 
 from almacode.agent import CodingAgent
 from almacode.config import AgentConfig
-from almacode.llm import LlamaBackend
+from almacode.llm import LlamaBackend, ModelLoadError
 from almacode.tools import WorkspaceTools
 
 
@@ -77,7 +77,11 @@ def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
     console = Console()
-    agent = build_agent(args, console)
+    try:
+        agent = build_agent(args, console)
+    except ModelLoadError as exc:
+        console.print(f"[bold red]Model load failed[/bold red]\n{exc}")
+        return 2
 
     if args.command == "run":
         answer = run_once(agent, args.task)
@@ -110,4 +114,3 @@ def main() -> int:
                 {"role": "assistant", "content": answer},
             ]
         )
-

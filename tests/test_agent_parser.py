@@ -1,4 +1,6 @@
 from almacode.agent import parse_action
+from almacode.config import AgentConfig
+from almacode.llm import LlamaBackend
 
 
 def test_parse_action_accepts_nested_schema() -> None:
@@ -16,3 +18,9 @@ def test_parse_action_extracts_embedded_json() -> None:
     assert action.tool == "final_answer"
     assert action.args["answer"] == "ok"
 
+
+def test_model_load_error_mentions_vl_models() -> None:
+    config = AgentConfig(model_path="Qwen3VL-8B-Thinking-Q8_0.gguf", workspace=".")
+    message = LlamaBackend._build_load_error(config, ValueError("Failed to load model from file"))
+    assert "vision-language model" in message
+    assert "text-only" in message
