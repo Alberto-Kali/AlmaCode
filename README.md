@@ -6,6 +6,7 @@ AlmaCode is a local coding agent for GGUF models. It runs entirely on your machi
 
 - Runs local GGUF models from disk through `llama-cpp-python`
 - Supports single-shot tasks and an interactive chat mode
+- Supports multimodal prompts for supported vision-language handlers with local images or URLs
 - Gives the model access to:
   - directory listing
   - file reads
@@ -42,6 +43,17 @@ almacode chat \
   --workspace .
 ```
 
+5. Run a multimodal prompt with a matching projector:
+
+```bash
+almacode run \
+  --model /models/Qwen2.5-VL-7B-Instruct.gguf \
+  --mmproj /models/mmproj-Qwen2.5-VL-7B-Instruct.gguf \
+  --mm-handler qwen2.5-vl \
+  --image ./screenshot.png \
+  "Read the screenshot and explain the build error."
+```
+
 ## Recommended models
 
 Instruction-tuned coding models with a GGUF chat template work best. Good starting points:
@@ -49,6 +61,8 @@ Instruction-tuned coding models with a GGUF chat template work best. Good starti
 - Qwen2.5-Coder Instruct GGUF
 - DeepSeek Coder Instruct GGUF
 - Codestral GGUF variants with a matching prompt template
+
+For multimodal usage, use a model and projector pair supported by `llama-cpp-python`, such as a Qwen2.5-VL export with its matching `mmproj`.
 
 ## Installation notes
 
@@ -95,12 +109,21 @@ almacode chat --model /models/model.gguf --chat-format chatml
 ### Useful flags
 
 - `--workspace`: restrict file access and shell working directories to this root
+- `--image`: attach one or more local image paths or URLs to the current prompt
+- `--mmproj`: path to the multimodal projector file required by multimodal handlers
+- `--mm-handler`: explicit multimodal handler such as `qwen2.5-vl`, `llava-1-5`, or `llava-1-6`
 - `--chat-format`: force a prompt format if the GGUF metadata is missing or wrong
 - `--n-ctx`: context window
 - `--n-gpu-layers`: number of layers offloaded to GPU, `-1` for all supported layers
 - `--max-steps`: upper bound on tool-use turns
 - `--command-timeout`: timeout in seconds for shell commands
 - `--verbose`: show the raw model JSON for debugging
+
+### Multimodal notes
+
+- AlmaCode auto-detects some multimodal handlers from the model filename, but `--mm-handler` lets you override that when needed.
+- In `chat` mode, use `/image path1 path2` to set active images for subsequent turns and `/clear-images` to remove them.
+- Supported handlers currently map to `llama-cpp-python` chat handlers documented upstream: `qwen2.5-vl`, `llava-1-5`, `llava-1-6`, `moondream2`, `nanollava`, `llama-3-vision-alpha`, and `minicpm-v-2.6`.
 
 ## Branching model
 

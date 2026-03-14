@@ -1,4 +1,6 @@
-from almacode.agent import parse_action
+from pathlib import Path
+
+from almacode.agent import build_user_message, parse_action
 from almacode.config import AgentConfig
 from almacode.llm import LlamaBackend
 
@@ -23,4 +25,25 @@ def test_model_load_error_mentions_vl_models() -> None:
     config = AgentConfig(model_path="Qwen3VL-8B-Thinking-Q8_0.gguf", workspace=".")
     message = LlamaBackend._build_load_error(config, ValueError("Failed to load model from file"))
     assert "vision-language model" in message
-    assert "text-only" in message
+    assert "--mmproj" in message
+
+
+def test_build_user_message_without_images() -> None:
+    message = build_user_message("describe")
+    assert message == {"role": "user", "content": "describe"}
+
+
+def test_build_user_message_with_local_image(tmp_path: Path) -> None:
+    image_path = tmp_path / "test.png"
+    image_path.write_bytes(b"\x89PNG\r\n\x1a\n")
+    message = build_user_message("describe", [str(image_path)])
+    content = message["content"]
+    assert isinstance(content, list)
+    assert content[0]["type"] == "text"
+    assert content[1]["type"] == "image_url"
+    assert content[1]["image_url"]["url"].startswith("data:image/png;base64,")
+
+
+def test_autodetect_qwen25_vl_handler() -> None:
+    handler = LlamaBackend._autodetect_handler_name(Path("Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf"))
+    assert handler == "qwen2.5-vl"

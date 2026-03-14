@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import base64
 import json
+import mimetypes
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from rich.console import Console
@@ -17,6 +20,34 @@ class AgentAction:
     tool: str
     args: dict[str, Any]
     thought: str = ""
+
+
+def _image_ref_to_url(image_ref: str) -> str:
+    if image_ref.startswith(("http://", "https://", "data:")):
+        return image_ref
+
+    image_path = Path(image_ref).expanduser().resolve()
+    if not image_path.exists():
+        raise FileNotFoundError(f"Image file does not exist: {image_ref}")
+    if not image_path.is_file():
+        raise ValueError(f"Image path is not a file: {image_ref}")
+
+    mime_type, _ = mimetypes.guess_type(image_path.name)
+    if mime_type is None:
+        mime_type = "application/octet-stream"
+
+    encoded = base64.b64encode(image_path.read_bytes()).decode("ascii")
+    return f"data:{mime_type};base64,{encoded}"
+
+
+def build_user_message(task: str, image_refs: list[str] | None = None) -> dict[str, Any]:
+    if not image_refs:
+        return {"role": "user", "content": task}
+
+    content: list[dict[str, Any]] = [{"type": "text", "text": task}]
+    for image_ref in image_refs:
+        content.append({"type": "image_url", "image_url": {"url": _image_ref_to_url(image_ref)}})
+    return {"role": "user", "content": content}
 
 
 def _extract_first_json_block(raw: str) -> str:
@@ -84,8 +115,8 @@ class CodingAgent:
         self._tools = tools
         self._console = console
 
-    def run(self, task: str, history: list[dict[str, str]] | None = None) -> str:
-        messages: list[dict[str, str]] = [
+    def run(self, task: str, history: list[dict[str, Any]] | None = None, image_refs: list[str] | None = None) -> str:
+        messages: list[dict[str, Any]] = [
             {
                 "role": "system",
                 "content": build_system_prompt(
@@ -97,7 +128,7 @@ class CodingAgent:
         ]
         if history:
             messages.extend(history)
-        messages.append({"role": "user", "content": task})
+        messages.append(build_user_message(task, image_refs=image_refs))
 
         for step in range(1, self._config.max_steps + 1):
             response = self._backend.complete(messages)
@@ -138,4 +169,3 @@ class CodingAgent:
         raise RuntimeError(
             f"Step limit reached ({self._config.max_steps}) before the model produced final_answer."
         )
-

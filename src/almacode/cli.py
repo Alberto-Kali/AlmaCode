@@ -18,6 +18,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--model", required=True, help="Path to a local GGUF model")
+    common.add_argument(
+        "--image",
+        action="append",
+        default=[],
+        help="Optional image path or URL. May be passed multiple times for multimodal models.",
+    )
+    common.add_argument("--mmproj", default=None, help="Path to the multimodal projector file")
+    common.add_argument(
+        "--mm-handler",
+        default=None,
+        help="Optional multimodal handler, for example qwen2.5-vl or llava-1-5",
+    )
     common.add_argument("--workspace", default=".", help="Workspace root for file and shell access")
     common.add_argument("--chat-format", default=None, help="Force a llama.cpp chat format")
     common.add_argument("--n-ctx", type=int, default=8192, help="Context window")
@@ -48,6 +60,8 @@ def config_from_args(args: argparse.Namespace) -> AgentConfig:
     return AgentConfig(
         model_path=Path(args.model),
         workspace=Path(args.workspace).resolve(),
+        mmproj_path=Path(args.mmproj) if args.mmproj else None,
+        mm_handler=args.mm_handler,
         max_steps=args.max_steps,
         temperature=args.temperature,
         top_p=args.top_p,
@@ -69,8 +83,13 @@ def build_agent(args: argparse.Namespace, console: Console) -> CodingAgent:
     return CodingAgent(config=config, backend=backend, tools=tools, console=console)
 
 
-def run_once(agent: CodingAgent, task: str, history: list[dict[str, str]] | None = None) -> str:
-    return agent.run(task, history=history)
+def run_once(
+    agent: CodingAgent,
+    task: str,
+    history: list[dict[str, object]] | None = None,
+    image_refs: list[str] | None = None,
+) -> str:
+    return agent.run(task, history=history, image_refs=image_refs)
 
 
 def main() -> int:
@@ -84,13 +103,14 @@ def main() -> int:
         return 2
 
     if args.command == "run":
-        answer = run_once(agent, args.task)
+        answer = run_once(agent, args.task, image_refs=args.image)
         console.print(answer)
         return 0
 
-    history: list[dict[str, str]] = []
+    history: list[dict[str, object]] = []
+    active_images = list(args.image)
     if args.opening_task:
-        answer = run_once(agent, args.opening_task, history=history)
+        answer = run_once(agent, args.opening_task, history=history, image_refs=active_images)
         console.print(answer)
         history.extend(
             [
@@ -99,14 +119,22 @@ def main() -> int:
             ]
         )
 
-    console.print("Interactive mode. Type /exit to quit.")
+    console.print("Interactive mode. Type /exit to quit, /image <path...> to set images, /clear-images to unset.")
     while True:
         prompt = Prompt.ask("[bold green]you[/bold green]")
         if prompt.strip() in {"/exit", "/quit"}:
             return 0
+        if prompt.startswith("/image "):
+            active_images = prompt.split()[1:]
+            console.print(f"Active images: {', '.join(active_images)}")
+            continue
+        if prompt.strip() == "/clear-images":
+            active_images = []
+            console.print("Active images cleared.")
+            continue
         if not prompt.strip():
             continue
-        answer = run_once(agent, prompt, history=history)
+        answer = run_once(agent, prompt, history=history, image_refs=active_images)
         console.print(answer)
         history.extend(
             [
