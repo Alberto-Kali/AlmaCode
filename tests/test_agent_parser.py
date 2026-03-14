@@ -47,3 +47,10 @@ def test_build_user_message_with_local_image(tmp_path: Path) -> None:
 def test_autodetect_qwen25_vl_handler() -> None:
     handler = LlamaBackend._autodetect_handler_name(Path("Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf"))
     assert handler == "qwen2.5-vl"
+
+
+def test_detect_unsupported_qwen3_vl_model() -> None:
+    message = LlamaBackend._detect_unsupported_multimodal_model(Path("Qwen3VL-8B-Thinking-Q8_0.gguf"))
+    assert message is not None
+    assert "Qwen3-VL" in message
+    assert "does not currently expose an official Qwen3-VL chat handler" in message

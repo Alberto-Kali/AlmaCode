@@ -33,6 +33,10 @@ class ModelLoadError(RuntimeError):
 
 class LlamaBackend:
     def __init__(self, config: AgentConfig) -> None:
+        unsupported_reason = self._detect_unsupported_multimodal_model(Path(config.model_path))
+        if unsupported_reason is not None:
+            raise ModelLoadError(unsupported_reason)
+
         try:
             from llama_cpp import Llama
         except ImportError as exc:
@@ -104,6 +108,21 @@ class LlamaBackend:
             return "llama-3-vision-alpha"
         if "minicpm" in lowered and "v-2.6" in lowered:
             return "minicpm-v-2.6"
+        return None
+
+    @staticmethod
+    def _detect_unsupported_multimodal_model(model_path: Path) -> str | None:
+        lowered = model_path.name.lower()
+        if "qwen3" in lowered and "vl" in lowered:
+            return "\n".join(
+                [
+                    f"Failed to load GGUF model: {model_path.expanduser().resolve()}",
+                    "This looks like a Qwen3-VL model.",
+                    "The bundled llama-cpp-python backend in AlmaCode does not currently expose an official Qwen3-VL chat handler.",
+                    "So even with --mmproj, this model cannot be initialized through the current Python backend yet.",
+                    "Use a supported multimodal family such as Qwen2.5-VL, or use a text-only coding model such as Qwen2.5-Coder-Instruct GGUF.",
+                ]
+            )
         return None
 
     @classmethod
