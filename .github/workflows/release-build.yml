@@ -17,12 +17,15 @@ jobs:
           - os: ubuntu-latest
             check_name: release-linux
             artifact_name: almacode-linux
+            binary_name: almacode-linux
           - os: macos-latest
             check_name: release-macos
             artifact_name: almacode-macos
+            binary_name: almacode-macos
           - os: windows-latest
             check_name: release-windows
             artifact_name: almacode-windows
+            binary_name: almacode-windows
     name: ${{ matrix.check_name }}
     runs-on: ${{ matrix.os }}
     steps:
@@ -57,6 +60,9 @@ jobs:
 
       - name: Build binary
         run: python scripts/build_binary.py
+
+      - name: Rename binary for release
+        run: python scripts/package_release_artifact.py --artifact-name "${{ matrix.binary_name }}"
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
