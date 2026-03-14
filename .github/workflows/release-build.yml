@@ -46,8 +46,11 @@ jobs:
             pip install --prefer-binary llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
           fi
 
+      - name: Install project dependencies
+        run: pip install rich pytest pyinstaller ruff
+
       - name: Install project
-        run: pip install -e ".[dev]" --no-deps
+        run: pip install -e . --no-deps
 
       - name: Run tests
         run: pytest
