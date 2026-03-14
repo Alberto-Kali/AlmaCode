@@ -1,0 +1,33 @@
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8080
+  },
+  "model": {
+    "model_path": "",
+    "mmproj_path": null,
+    "chat_template": null
+  },
+  "runtime": {
+    "ctx_size": 8192,
+    "gpu_layers": -1,
+    "threads": null,
+    "threads_batch": null,
+    "batch_size": 1024,
+    "ubatch_size": 1024,
+    "flash_attn": true
+  },
+  "multi_gpu": {
+    "tensor_split": null,
+    "row_split": false
+  },
+  "advanced": {
+    "extra_flags": [],
+    "cache_type_k": null,
+    "cache_type_v": null,
+    "numa": false,
+    "no_mmap": false,
+    "mlock": false
+  }
+}
+

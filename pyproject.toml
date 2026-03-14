@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "almacode"
-version = "0.1.0"
-description = "Local GGUF coding agent powered by llama.cpp"
+version = "0.4.0"
+description = "CLI coding agent for llama-server"
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
 license = { text = "MIT" }
@@ -13,7 +13,6 @@ authors = [
   { name = "Alberto Kali" }
 ]
 dependencies = [
-  "llama-cpp-python>=0.3.0",
   "rich>=13.7.1"
 ]
 
@@ -26,9 +25,10 @@ dev = [
 
 [project.scripts]
 almacode = "almacode.cli:main"
+almacode-server = "almacode_server.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/almacode"]
+packages = ["src/almacode", "src/almacode_server"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

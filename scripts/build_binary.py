@@ -18,10 +18,6 @@ def main() -> int:
         "--onefile",
         "--name",
         "almacode",
-        "--collect-all",
-        "llama_cpp",
-        "--copy-metadata",
-        "llama-cpp-python",
         "--paths",
         str(ROOT / "src"),
         str(ROOT / "src" / "almacode" / "__main__.py"),
@@ -32,4 +28,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

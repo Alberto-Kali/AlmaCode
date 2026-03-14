@@ -1,176 +1,168 @@
 # AlmaCode
 
-AlmaCode is a local coding agent for GGUF models. It runs entirely on your machine with `llama.cpp` via `llama-cpp-python`, can inspect and edit files in a workspace, and can execute terminal commands in a controlled loop similar to Claude Code style agents.
+AlmaCode is a local coding agent split into two parts:
 
-## Features
+- `almacode`: a single CLI binary that behaves like a coding agent and talks to a running `llama-server`
+- `almacode-server`: a Linux-first wrapper/installer package that builds and manages `llama-server` for local GGUF inference
 
-- Runs local GGUF models from disk through `llama-cpp-python`
-- Supports single-shot tasks and an interactive chat mode
-- Supports multimodal prompts for supported vision-language handlers with local images or URLs
-- Gives the model access to:
-  - directory listing
-  - file reads
-  - file writes and appends
-  - targeted string replacements
-  - shell command execution with timeouts
-- Restricts file operations to the chosen workspace root
-- Packages into a standalone binary with PyInstaller
-- Includes CI for `dev` and release builds for `release`
+The client no longer loads GGUF models directly and has no runtime dependency on `llama-cpp-python`.
 
-## Quick start
+## Architecture
 
-1. Create a virtual environment with Python 3.10-3.12.
-2. Install the project:
+### Client
+
+- one-file CLI binary via PyInstaller
+- handles tool use, shell access, workspace file operations, and chat UX
+- sends OpenAI-compatible requests to `llama-server`
+- supports text and multimodal prompts through `messages`
+
+### Server
+
+- Linux x86_64 package distributed as `almacode-server-linux-x86_64.zip`
+- installs a local wrapper and configuration under `~/.local/share/almacode-server` by default
+- builds `llama.cpp/llama-server` from source for CUDA 12.8
+- owns model selection, `mmproj`, GPU layout, and runtime flags
+
+## Client quick start
+
+1. Install the project for development:
 
 ```bash
 python -m pip install --upgrade pip
 pip install -e ".[dev]"
 ```
 
-3. Run the agent with a local GGUF model:
+2. Configure the client with one of:
+
+- `--server-url http://127.0.0.1:8080`
+- `ALMACODE_SERVER_URL=http://127.0.0.1:8080`
+- `~/.config/almacode/client.json`
+
+Example config:
+
+```json
+{
+  "server_url": "http://127.0.0.1:8080",
+  "api_key": null,
+  "request_timeout": 120
+}
+```
+
+3. Run the client:
 
 ```bash
 almacode run \
-  --model /models/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf \
-  "Open the project, inspect the failing tests, and fix them."
+  --server-url http://127.0.0.1:8080 \
+  --workspace . \
+  "Inspect the repo and write a tiny hello world example."
 ```
 
-4. Start an interactive session:
+4. Start interactive chat:
 
 ```bash
-almacode chat \
-  --model /models/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf \
-  --workspace .
+almacode chat --server-url http://127.0.0.1:8080 --workspace .
 ```
 
-5. Run a multimodal prompt with a matching projector:
+## Multimodal client usage
+
+Attach images with `--image`:
 
 ```bash
 almacode run \
-  --model /models/Qwen2.5-VL-7B-Instruct.gguf \
-  --mmproj /models/mmproj-Qwen2.5-VL-7B-Instruct.gguf \
-  --mm-handler qwen2.5-vl \
+  --server-url http://127.0.0.1:8080 \
   --image ./screenshot.png \
-  "Read the screenshot and explain the build error."
+  "Read the screenshot and explain the error."
 ```
 
-## Recommended models
+In `chat` mode:
 
-Instruction-tuned coding models with a GGUF chat template work best. Good starting points:
+- `/image path1 path2` sets active images
+- `/clear-images` clears them
 
-- Qwen2.5-Coder Instruct GGUF
-- DeepSeek Coder Instruct GGUF
-- Codestral GGUF variants with a matching prompt template
+## Deprecated local model flags
 
-For multimodal usage, use a model and projector pair supported by `llama-cpp-python`, such as a Qwen2.5-VL export with its matching `mmproj`.
+The client still parses old local-runtime flags for migration, but using them now fails fast with a migration message:
 
-## Installation notes
+- `--model`
+- `--mmproj`
+- `--mm-handler`
+- `--backend`
+- `--llama-server-binary`
+- `--chat-format`
+- `--n-gpu-layers`
 
-`llama-cpp-python` can run CPU-only out of the box, but it also supports backend-specific acceleration. The upstream README documents current install flags such as:
+Those values now belong in the server config, not in the client process.
 
-- OpenBLAS on CPU via `CMAKE_ARGS="-DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS"`
-- CUDA via `CMAKE_ARGS="-DGGML_CUDA=on"`
-- Metal via `CMAKE_ARGS="-DGGML_METAL=on"`
+## Server package
 
-Examples from the official docs:
+Build the server installer zip:
 
 ```bash
-CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python
-CMAKE_ARGS="-DGGML_METAL=on" pip install llama-cpp-python
+python scripts/build_server_package.py
 ```
 
-The project CI uses Python 3.12 because the upstream project documents prebuilt acceleration wheels for Python 3.10-3.12.
-
-CI uses the official extra index URLs from the upstream project where that helps:
-
-- CPU wheels: `https://abetlen.github.io/llama-cpp-python/whl/cpu`
-- Metal wheels: `https://abetlen.github.io/llama-cpp-python/whl/metal`
-
-For Linux release artifacts, the project intentionally builds `llama-cpp-python` from source in CI instead of reusing the generic CPU wheel. That keeps the bundled `libllama.so` linked against the runner's normal glibc toolchain and avoids runtime failures caused by musl-linked binaries on standard desktop distributions.
-
-## CLI
-
-### `almacode run`
-
-Runs one autonomous task and exits after the model returns a final answer or the step budget is exhausted.
+Install it:
 
 ```bash
-almacode run --model /models/model.gguf --workspace . "Refactor src/ and explain what changed."
+cd server_package
+./install.sh
 ```
 
-### `almacode chat`
+Default install location:
 
-Starts an interactive loop. Each new user prompt includes the previous high-level conversation but does not replay the full low-level tool trace.
+```text
+~/.local/share/almacode-server
+```
+
+Main commands:
 
 ```bash
-almacode chat --model /models/model.gguf --chat-format chatml
+~/.local/share/almacode-server/bin/almacode-server doctor
+~/.local/share/almacode-server/bin/almacode-server configure --write-default
+~/.local/share/almacode-server/bin/almacode-server configure --set model.model_path=/models/model.gguf
+~/.local/share/almacode-server/bin/almacode-server install
+~/.local/share/almacode-server/bin/almacode-server start
+~/.local/share/almacode-server/bin/almacode-server status
+~/.local/share/almacode-server/bin/almacode-server logs
+~/.local/share/almacode-server/bin/almacode-server stop
 ```
 
-### Useful flags
+## Server config
 
-- `--workspace`: restrict file access and shell working directories to this root
-- `--image`: attach one or more local image paths or URLs to the current prompt
-- `--mmproj`: path to the multimodal projector file required by multimodal handlers
-- `--mm-handler`: explicit multimodal handler such as `qwen2.5-vl`, `llava-1-5`, or `llava-1-6`
-- `--backend`: `auto`, `python`, or `server`
-- `--llama-server-binary`: path to an external `llama-server` binary for server fallback
-- `--chat-format`: force a prompt format if the GGUF metadata is missing or wrong
-- `--n-ctx`: context window
-- `--n-gpu-layers`: number of layers offloaded to GPU, `-1` for all supported layers
-- `--max-steps`: upper bound on tool-use turns
-- `--command-timeout`: timeout in seconds for shell commands
-- `--verbose`: show the raw model JSON for debugging
+The server config lives at:
 
-### Multimodal notes
-
-- AlmaCode auto-detects some multimodal handlers from the model filename, but `--mm-handler` lets you override that when needed.
-- In `chat` mode, use `/image path1 path2` to set active images for subsequent turns and `/clear-images` to remove them.
-- Supported handlers currently map to `llama-cpp-python` chat handlers documented upstream: `qwen2.5-vl`, `llava-1-5`, `llava-1-6`, `moondream2`, `nanollava`, `llama-3-vision-alpha`, and `minicpm-v-2.6`.
-- For models that are ahead of the Python binding, such as some `Qwen3-VL` exports, AlmaCode can try an external `llama-server` binary in `--backend server` mode or via automatic fallback.
-
-## Branching model
-
-- `dev`: default working branch, protected, runs build verification and tests
-- `release`: protected stabilization branch, runs cross-platform binary builds
-
-Suggested flow:
-
-1. Work on feature branches from `dev`
-2. Merge into `dev` after the `dev-build` check passes
-3. Merge `dev` into `release` when you want a releasable state
-4. Tag a release commit on `release` with `vX.Y.Z` to publish binaries to GitHub Releases
-
-## GitHub automation
-
-### `dev-build`
-
-- Triggers on pushes and pull requests targeting `dev`
-- Installs the package
-- Runs unit tests
-- Builds the one-file binary as a smoke test
-
-### `release-build`
-
-- Triggers on pushes to `release`, release tags `v*`, and manual dispatch
-- Builds binaries for Linux, macOS, and Windows
-- Uploads workflow artifacts on branch builds
-- Publishes binaries to GitHub Releases on version tags
-
-## Branch protection
-
-This repo is configured for solo development with guardrails but without locking the owner out:
-
-- `dev` requires the `dev-build` status check
-- `release` requires all three release build checks
-- force pushes and branch deletion are disabled
-- linear history is required
-- admin enforcement is intentionally disabled so the repo owner can bypass in emergencies
-
-You can re-apply the GitHub settings with:
-
-```bash
-python scripts/configure_github.py --repo Alberto-Kali/AlmaCode
+```text
+<server-home>/config/server.json
 ```
+
+It contains:
+
+- `server.host`, `server.port`
+- `model.model_path`, `model.mmproj_path`, `model.chat_template`
+- `runtime.ctx_size`, `runtime.gpu_layers`, `runtime.threads`, `runtime.threads_batch`, `runtime.batch_size`, `runtime.ubatch_size`, `runtime.flash_attn`
+- `multi_gpu.tensor_split`, `multi_gpu.row_split`
+- `advanced.extra_flags`, `advanced.cache_type_k`, `advanced.cache_type_v`, `advanced.numa`, `advanced.no_mmap`, `advanced.mlock`
+
+## CUDA 12.8 and multi-GPU
+
+The server package is Linux-first and builds `llama-server` from `llama.cpp` source instead of relying on Python wheels.
+
+Required for `almacode-server doctor` / `install`:
+
+- Linux x86_64
+- `python3`
+- `git`
+- `cmake`
+- `ninja` or `make`
+- `nvcc`
+- CUDA toolkit `12.8`
+- NVIDIA driver / `nvidia-smi`
+
+Multi-GPU configuration follows `llama-server` style flags inspired by `text-generation-webui`:
+
+- `tensor_split`: comma-separated proportions like `60,40`
+- `row_split`: when enabled, renders `--split-mode row`
+- `gpu_layers=-1`: recommended default for full offload when supported
 
 ## Development
 
@@ -180,14 +172,34 @@ Run tests:
 pytest
 ```
 
-Build a local binary:
+Build the client binary:
 
 ```bash
 python scripts/build_binary.py
 ```
 
+Build the server installer zip:
+
+```bash
+python scripts/build_server_package.py
+```
+
+## CI/CD
+
+### `dev-build`
+
+- runs tests
+- builds the client binary
+- assembles the Linux server installer zip
+
+### `release-build`
+
+- builds client binaries for Linux, macOS, and Windows
+- builds `almacode-server-linux-x86_64.zip` on Linux
+- publishes all artifacts to GitHub Releases on version tags
+
 ## Sources
 
-- `llama-cpp-python` official README: chat completions, JSON mode, hardware backends
-- `llama.cpp` official README: GGUF requirement and local model usage
-- GitHub Docs: protected branches and required status checks
+- `text-generation-webui` `llama_cpp_server.py` for `llama-server` launch/config ideas
+- `llama.cpp` official repository for `llama-server`
+- GitHub Docs for protected branches and required status checks
