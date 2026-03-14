@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from almacode.config import AgentConfig
+from almacode.server_backend import LlamaServerBackend, ServerBackendError
 
 
 SUPPORTED_MM_HANDLERS: dict[str, tuple[str, tuple[str, ...]]] = {
@@ -33,8 +34,21 @@ class ModelLoadError(RuntimeError):
 
 class LlamaBackend:
     def __init__(self, config: AgentConfig) -> None:
+        self._config = config
+        self._server_backend: LlamaServerBackend | None = None
+
         unsupported_reason = self._detect_unsupported_multimodal_model(Path(config.model_path))
+        if config.backend == "server":
+            self._init_server_backend(config)
+            return
+
         if unsupported_reason is not None:
+            if config.mmproj_path is not None:
+                try:
+                    self._init_server_backend(config)
+                    return
+                except ModelLoadError as exc:
+                    raise ModelLoadError(f"{unsupported_reason}\n\nServer fallback failed:\n{exc}") from exc
             raise ModelLoadError(unsupported_reason)
 
         try:
@@ -63,9 +77,15 @@ class LlamaBackend:
             self._client = Llama(**init_kwargs)
         except Exception as exc:  # noqa: BLE001
             raise ModelLoadError(self._build_load_error(config, exc)) from exc
-        self._config = config
 
     def complete(self, messages: list[dict[str, Any]]) -> LLMResponse:
+        if self._server_backend is not None:
+            response = self._server_backend.complete(messages)
+            choice = response["choices"][0]["message"]["content"]
+            if not isinstance(choice, str):
+                choice = str(choice)
+            return LLMResponse(content=choice, raw=response)
+
         response = self._client.create_chat_completion(
             messages=messages,
             response_format={"type": "json_object"},
@@ -77,6 +97,16 @@ class LlamaBackend:
         if not isinstance(choice, str):
             choice = str(choice)
         return LLMResponse(content=choice, raw=response)
+
+    def close(self) -> None:
+        if self._server_backend is not None:
+            self._server_backend.close()
+
+    def _init_server_backend(self, config: AgentConfig) -> None:
+        try:
+            self._server_backend = LlamaServerBackend(config)
+        except ServerBackendError as exc:
+            raise ModelLoadError(str(exc)) from exc
 
     @staticmethod
     def _normalize_handler_name(name: str) -> str:
@@ -118,9 +148,9 @@ class LlamaBackend:
                 [
                     f"Failed to load GGUF model: {model_path.expanduser().resolve()}",
                     "This looks like a Qwen3-VL model.",
-                    "The bundled llama-cpp-python backend in AlmaCode does not currently expose an official Qwen3-VL chat handler.",
-                    "So even with --mmproj, this model cannot be initialized through the current Python backend yet.",
-                    "Use a supported multimodal family such as Qwen2.5-VL, or use a text-only coding model such as Qwen2.5-Coder-Instruct GGUF.",
+                    "The direct Python llama-cpp backend used by AlmaCode does not currently provide a dedicated Qwen3-VL chat handler.",
+                    "AlmaCode can still try an external llama.cpp server fallback if you provide --mmproj and a usable llama-server binary.",
+                    "Pass --llama-server-binary /path/to/llama-server, or put llama-server on PATH.",
                 ]
             )
         return None
@@ -203,7 +233,7 @@ class LlamaBackend:
                     "This looks like a vision-language model.",
                     "Multimodal models require a matching mmproj file and a supported chat handler.",
                     "Pass --mmproj /path/to/mmproj.gguf and optionally --mm-handler qwen2.5-vl (or another supported handler).",
-                    "If you want pure coding mode without images, use a text model such as Qwen2.5-Coder-Instruct GGUF.",
+                    "If the Python backend still fails, try --backend server with --llama-server-binary /path/to/llama-server.",
                 ]
             )
         else:

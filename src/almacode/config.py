@@ -10,6 +10,8 @@ class AgentConfig:
     workspace: Path
     mmproj_path: Path | None = None
     mm_handler: str | None = None
+    backend: str = "auto"
+    llama_server_binary: Path | None = None
     max_steps: int = 18
     temperature: float = 0.2
     top_p: float = 0.95

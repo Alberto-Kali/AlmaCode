@@ -53,4 +53,4 @@ def test_detect_unsupported_qwen3_vl_model() -> None:
     message = LlamaBackend._detect_unsupported_multimodal_model(Path("Qwen3VL-8B-Thinking-Q8_0.gguf"))
     assert message is not None
     assert "Qwen3-VL" in message
-    assert "does not currently expose an official Qwen3-VL chat handler" in message
+    assert "llama-server" in message

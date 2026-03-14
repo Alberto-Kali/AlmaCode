@@ -30,6 +30,17 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional multimodal handler, for example qwen2.5-vl or llava-1-5",
     )
+    common.add_argument(
+        "--backend",
+        choices=["auto", "python", "server"],
+        default="auto",
+        help="Backend selection. Use server to force an external llama-server fallback.",
+    )
+    common.add_argument(
+        "--llama-server-binary",
+        default=None,
+        help="Path to an external llama-server binary used for server backend fallback.",
+    )
     common.add_argument("--workspace", default=".", help="Workspace root for file and shell access")
     common.add_argument("--chat-format", default=None, help="Force a llama.cpp chat format")
     common.add_argument("--n-ctx", type=int, default=8192, help="Context window")
@@ -62,6 +73,8 @@ def config_from_args(args: argparse.Namespace) -> AgentConfig:
         workspace=Path(args.workspace).resolve(),
         mmproj_path=Path(args.mmproj) if args.mmproj else None,
         mm_handler=args.mm_handler,
+        backend=args.backend,
+        llama_server_binary=Path(args.llama_server_binary) if args.llama_server_binary else None,
         max_steps=args.max_steps,
         temperature=args.temperature,
         top_p=args.top_p,

@@ -112,6 +112,8 @@ almacode chat --model /models/model.gguf --chat-format chatml
 - `--image`: attach one or more local image paths or URLs to the current prompt
 - `--mmproj`: path to the multimodal projector file required by multimodal handlers
 - `--mm-handler`: explicit multimodal handler such as `qwen2.5-vl`, `llava-1-5`, or `llava-1-6`
+- `--backend`: `auto`, `python`, or `server`
+- `--llama-server-binary`: path to an external `llama-server` binary for server fallback
 - `--chat-format`: force a prompt format if the GGUF metadata is missing or wrong
 - `--n-ctx`: context window
 - `--n-gpu-layers`: number of layers offloaded to GPU, `-1` for all supported layers
@@ -124,6 +126,7 @@ almacode chat --model /models/model.gguf --chat-format chatml
 - AlmaCode auto-detects some multimodal handlers from the model filename, but `--mm-handler` lets you override that when needed.
 - In `chat` mode, use `/image path1 path2` to set active images for subsequent turns and `/clear-images` to remove them.
 - Supported handlers currently map to `llama-cpp-python` chat handlers documented upstream: `qwen2.5-vl`, `llava-1-5`, `llava-1-6`, `moondream2`, `nanollava`, `llama-3-vision-alpha`, and `minicpm-v-2.6`.
+- For models that are ahead of the Python binding, such as some `Qwen3-VL` exports, AlmaCode can try an external `llama-server` binary in `--backend server` mode or via automatic fallback.
 
 ## Branching model
 
