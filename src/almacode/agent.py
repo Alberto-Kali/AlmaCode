@@ -23,6 +23,14 @@ class AgentAction:
     thought: str = ""
 
 
+class AgentRuntimeError(RuntimeError):
+    pass
+
+
+class StepLimitReachedError(AgentRuntimeError):
+    pass
+
+
 def _image_ref_to_url(image_ref: str) -> str:
     if image_ref.startswith(("http://", "https://", "data:")):
         return image_ref
@@ -140,6 +148,9 @@ class CodingAgent:
         user_message = build_user_message(task, image_refs=image_refs)
         active_session.append_message(user_message)
 
+        repeated_action_count = 0
+        last_action_fingerprint: tuple[str, str, str] | None = None
+
         for step in range(1, self._config.max_steps + 1):
             self._compact_if_needed(active_session, system_prompt, task, user_message)
             messages = active_session.build_messages(
@@ -182,6 +193,32 @@ class CodingAgent:
             if action.thought:
                 self._emit("thought", f"Step {step} {action.thought}")
 
+            action_fingerprint = (
+                action.tool,
+                json.dumps(action.args, ensure_ascii=True, sort_keys=True),
+                action.thought.strip(),
+            )
+            if action_fingerprint == last_action_fingerprint:
+                repeated_action_count += 1
+            else:
+                repeated_action_count = 0
+                last_action_fingerprint = action_fingerprint
+
+            if repeated_action_count >= 2:
+                active_session.append_message({"role": "assistant", "content": response.content})
+                active_session.append_message(
+                    {
+                        "role": "user",
+                        "content": (
+                            "You are repeating the same step without making progress. "
+                            "Do not repeat the same action again. Either use a different tool, "
+                            "summarize what is done, or return final_answer with the current state and blockers."
+                        ),
+                    }
+                )
+                self._emit("status", "Detected repeated step loop. Asking the model to change strategy.")
+                continue
+
             if action.tool == "final_answer":
                 answer = str(action.args.get("answer", "")).strip()
                 if not answer:
@@ -200,9 +237,9 @@ class CodingAgent:
             active_session.append_message({"role": "assistant", "content": response.content})
             active_session.append_message({"role": "user", "content": build_tool_feedback(action.tool, result)})
             active_session.record_tool(action.tool, result)
-            self._emit("tool", f"{action.tool}\n{result}")
+            self._emit("tool", self._format_tool_event(action.tool, action.args, result))
 
-        raise RuntimeError(
+        raise StepLimitReachedError(
             f"Step limit reached ({self._config.max_steps}) before the model produced final_answer."
         )
 
@@ -262,5 +299,23 @@ class CodingAgent:
             self._console.print(f"[cyan]{message}[/cyan]")
         elif kind == "status":
             self._console.print(f"[magenta]{message}[/magenta]")
+        elif kind == "error":
+            self._console.print(f"[bold red]{message}[/bold red]")
         if self._event_handler is not None:
             self._event_handler(kind, message)
+
+    @staticmethod
+    def _format_tool_event(tool_name: str, args: dict[str, Any], result: str) -> str:
+        lines = [f"tool: {tool_name}"]
+        if tool_name == "run_command":
+            command = str(args.get("command", ""))
+            cwd = str(args.get("cwd", "."))
+            lines.append(f"command: {command}")
+            lines.append(f"cwd: {cwd}")
+        elif tool_name in {"write_file", "replace_in_file", "read_file", "make_dir", "list_dir"}:
+            path = str(args.get("path", ""))
+            if path:
+                lines.append(f"path: {path}")
+        lines.append("result:")
+        lines.append(result)
+        return "\n".join(lines)

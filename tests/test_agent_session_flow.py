@@ -1,8 +1,9 @@
 from pathlib import Path
 
+import pytest
 from rich.console import Console
 
-from almacode.agent import CodingAgent
+from almacode.agent import CodingAgent, StepLimitReachedError
 from almacode.config import AgentConfig
 from almacode.llm import ContextOverflowError, LLMResponse
 from almacode.session import AgentSession
@@ -42,3 +43,25 @@ def test_agent_recovers_from_context_overflow(tmp_path: Path) -> None:
     assert backend.summary_calls == 1
     assert session.summary == "short memory"
     assert session.recent_history[-2]["role"] == "user"
+
+
+class _RepeatingBackend:
+    def complete(self, messages: list[dict[str, object]]) -> LLMResponse:
+        return LLMResponse(
+            content='{"thought":"inspect again","action":{"tool":"list_dir","args":{"path":"."}}}',
+            raw={},
+        )
+
+    def summarize(self, messages: list[dict[str, object]], max_tokens: int) -> str:
+        return "summary"
+
+
+def test_agent_breaks_repeated_step_loop(tmp_path: Path) -> None:
+    agent = CodingAgent(
+        config=AgentConfig(workspace=tmp_path, server_url="http://127.0.0.1:8080", max_steps=5),
+        backend=_RepeatingBackend(),  # type: ignore[arg-type]
+        tools=WorkspaceTools(root=tmp_path, default_timeout=5),
+        console=Console(record=True),
+    )
+    with pytest.raises(StepLimitReachedError):
+        agent.run("loop please", session=AgentSession())

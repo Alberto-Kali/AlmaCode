@@ -6,7 +6,7 @@ from pathlib import Path
 from rich.console import Console
 from rich.prompt import Prompt
 
-from almacode.agent import CodingAgent
+from almacode.agent import AgentRuntimeError, CodingAgent
 from almacode.config import (
     AgentConfig,
     ClientSettings,
@@ -157,7 +157,11 @@ def main() -> int:
         return 2
 
     if args.command == "run":
-        answer = run_once(agent, args.task, image_refs=args.image)
+        try:
+            answer = run_once(agent, args.task, image_refs=args.image)
+        except AgentRuntimeError as exc:
+            console.print(f"[bold red]Run failed[/bold red]\n{exc}")
+            return 2
         console.print(answer)
         return 0
 
@@ -178,7 +182,11 @@ def main() -> int:
         return 0
 
     if args.opening_task:
-        answer = run_once(agent, args.opening_task, session=session, image_refs=active_images)
+        try:
+            answer = run_once(agent, args.opening_task, session=session, image_refs=active_images)
+        except AgentRuntimeError as exc:
+            console.print(f"[bold red]Run failed[/bold red]\n{exc}")
+            return 2
         console.print(answer)
 
     console.print("Interactive mode. Type /exit to quit, /image <path...> to set images, /clear-images to unset.")
@@ -196,5 +204,9 @@ def main() -> int:
             continue
         if not prompt.strip():
             continue
-        answer = run_once(agent, prompt, session=session, image_refs=active_images)
+        try:
+            answer = run_once(agent, prompt, session=session, image_refs=active_images)
+        except AgentRuntimeError as exc:
+            console.print(f"[bold red]Run failed[/bold red]\n{exc}")
+            continue
         console.print(answer)

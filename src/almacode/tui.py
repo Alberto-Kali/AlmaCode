@@ -5,7 +5,7 @@ from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal
 from textual.widgets import Footer, Header, Input, RichLog, Static, TabbedContent, TabPane
 
-from almacode.agent import CodingAgent
+from almacode.agent import AgentRuntimeError, CodingAgent
 from almacode.session import AgentSession
 
 
@@ -99,20 +99,29 @@ class AlmaCodeApp(App[None]):
 
     @work(thread=True, exclusive=True)
     def run_prompt(self, prompt: str) -> None:
-        self._agent.run(prompt, session=self._session, image_refs=self._active_images)
-        self.call_from_thread(self._refresh_status)
+        try:
+            self._agent.run(prompt, session=self._session, image_refs=self._active_images)
+        except AgentRuntimeError as exc:
+            self.call_from_thread(self._handle_agent_event_main, "error", str(exc))
+        except Exception as exc:  # noqa: BLE001
+            self.call_from_thread(self._handle_agent_event_main, "error", f"Unexpected failure: {exc}")
+        finally:
+            self.call_from_thread(self._refresh_status)
 
     def handle_agent_event(self, kind: str, message: str) -> None:
         self.call_from_thread(self._handle_agent_event_main, kind, message)
 
     def _handle_agent_event_main(self, kind: str, message: str) -> None:
-        if kind in {"thought", "status", "final"}:
+        if kind in {"thought", "status", "final", "error"}:
             self._write_chat(f"[{kind}] {message}")
         if kind == "tool":
             self.query_one("#tool-log", RichLog).write(message)
+            self._write_chat(self._tool_summary_for_chat(message))
         if kind == "context":
             self.query_one("#context-view", Static).update(message)
         if kind == "status":
+            self.query_one("#status-view", Static).update(message)
+        if kind == "error":
             self.query_one("#status-view", Static).update(message)
         self._refresh_status()
 
@@ -142,3 +151,15 @@ class AlmaCodeApp(App[None]):
             )
         )
         self.query_one("#context-view", Static).update(self._session.summary or "[no working-memory summary yet]")
+
+    @staticmethod
+    def _tool_summary_for_chat(message: str) -> str:
+        lines = message.splitlines()
+        tool = next((line.split(": ", 1)[1] for line in lines if line.startswith("tool: ")), "tool")
+        command = next((line.split(": ", 1)[1] for line in lines if line.startswith("command: ")), "")
+        path = next((line.split(": ", 1)[1] for line in lines if line.startswith("path: ")), "")
+        if command:
+            return f"[tool] {tool}: {command}"
+        if path:
+            return f"[tool] {tool}: {path}"
+        return f"[tool] {tool}"
