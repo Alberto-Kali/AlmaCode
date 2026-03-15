@@ -43,6 +43,22 @@ def test_render_command_includes_multimodal_and_multi_gpu(tmp_path: Path) -> Non
     assert "--metrics" in command
 
 
+def test_render_command_can_use_explicit_binary_path(tmp_path: Path) -> None:
+    layout = default_layout(tmp_path)
+    external_binary = tmp_path / "bin" / "llama-server"
+    external_binary.parent.mkdir(parents=True, exist_ok=True)
+    external_binary.write_text("", encoding="utf-8")
+    model = tmp_path / "model.gguf"
+    _write_model(model)
+
+    config = ServerConfig()
+    config.model.model_path = str(model)
+    config.advanced.binary_path = str(external_binary)
+
+    command = ServerManager(layout).render_command(config)
+    assert command[0] == str(external_binary)
+
+
 def test_validate_config_requires_mmproj_for_vision_model(tmp_path: Path) -> None:
     layout = default_layout(tmp_path)
     manager = ServerManager(layout)
@@ -82,3 +98,8 @@ def test_load_and_save_server_config(tmp_path: Path) -> None:
     save_server_config(layout.config_path, config)
     loaded = ServerManager(layout).load_config()
     assert loaded.model.model_path == str(model)
+
+
+def test_parse_cuda_release() -> None:
+    output = "Cuda compilation tools, release 13.1, V13.1.115"
+    assert ServerManager._parse_cuda_release(output) == (13, 1)

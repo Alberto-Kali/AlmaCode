@@ -13,13 +13,12 @@ This package installs the AlmaCode server wrapper for Linux x86_64.
 
 ```bash
 ./install.sh
-~/.local/share/almacode-server/bin.almacode-server doctor
-~/.local/share/almacode-server/bin.almacode-server configure --write-default
-~/.local/share/almacode-server/bin.almacode-server install
-~/.local/share/almacode-server/bin.almacode-server start
+~/.local/share/almacode-server/bin/almacode-server doctor
+~/.local/share/almacode-server/bin/almacode-server configure --write-default
+~/.local/share/almacode-server/bin/almacode-server install
+~/.local/share/almacode-server/bin/almacode-server start
 ```
 
 ## CUDA
 
 The wrapper expects a local CUDA 12.8 toolkit and builds `llama-server` from source.
-

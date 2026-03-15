@@ -22,6 +22,7 @@
     "row_split": false
   },
   "advanced": {
+    "binary_path": null,
     "extra_flags": [],
     "cache_type_k": null,
     "cache_type_v": null,
@@ -30,4 +31,3 @@
     "mlock": false
   }
 }
-

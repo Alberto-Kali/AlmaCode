@@ -47,6 +47,7 @@ class MultiGPUSection:
 
 @dataclass(slots=True)
 class AdvancedSection:
+    binary_path: str | None = None
     extra_flags: list[str] = field(default_factory=list)
     cache_type_k: str | None = None
     cache_type_v: str | None = None

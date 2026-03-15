@@ -5,6 +5,7 @@ import re
 import shutil
 import signal
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -39,8 +40,9 @@ class ServerManager:
         return load_server_config(self.layout.config_path)
 
     def render_command(self, config: ServerConfig) -> list[str]:
+        binary_path = self.resolve_binary_path(config)
         command = [
-            str(self.layout.binary_path),
+            str(binary_path),
             "--model",
             config.model.model_path,
             "--host",
@@ -95,6 +97,22 @@ class ServerManager:
             raise ServerManagerError(f"mmproj file does not exist: {config.model.mmproj_path}")
         if config.multi_gpu.tensor_split and not re.fullmatch(r"\d+(\.\d+)?(,\d+(\.\d+)?)+", config.multi_gpu.tensor_split):
             raise ServerManagerError("multi_gpu.tensor_split must be a comma-separated list like 60,40")
+        self.resolve_binary_path(config)
+
+    def resolve_binary_path(self, config: ServerConfig | None = None) -> Path:
+        configured = None
+        if config is not None and config.advanced.binary_path:
+            configured = Path(config.advanced.binary_path).expanduser().resolve()
+            if configured.exists():
+                return configured
+            raise ServerManagerError(f"Configured llama-server binary does not exist: {configured}")
+        if self.layout.binary_path.exists():
+            return self.layout.binary_path
+        system_binary = shutil.which("llama-server")
+        if system_binary:
+            return Path(system_binary).resolve()
+        hint = configured or self.layout.binary_path
+        raise ServerManagerError(f"llama-server binary not found. Expected one of: {hint} or llama-server in PATH")
 
     def install_runtime(self) -> list[str]:
         ensure_layout(self.layout)
@@ -126,6 +144,8 @@ class ServerManager:
     def doctor(self) -> DoctorReport:
         messages: list[str] = []
         ok = True
+        messages.append(f"Server home: {self.layout.root}")
+        messages.append(f"Config path: {self.layout.config_path}")
         if os.uname().sysname != "Linux":
             ok = False
             messages.append("Linux is required for the server package.")
@@ -145,16 +165,25 @@ class ServerManager:
             messages.append("Missing dependency: nvcc (CUDA toolkit 12.8)")
         else:
             version = subprocess.run([nvcc, "--version"], capture_output=True, text=True, check=False).stdout
-            if "release 12.8" not in version:
+            release = self._parse_cuda_release(version)
+            if release is None:
                 ok = False
-                messages.append("CUDA toolkit 12.8 is required.")
+                messages.append("Could not determine CUDA toolkit version from nvcc.")
+            elif release < (12, 8):
+                ok = False
+                messages.append(f"CUDA toolkit 12.8 or newer is required. Found {release[0]}.{release[1]}.")
+            else:
+                messages.append(f"Found CUDA toolkit {release[0]}.{release[1]}.")
         if shutil.which("nvidia-smi") is None:
             ok = False
             messages.append("Missing dependency: nvidia-smi")
+        else:
+            messages.append("Found nvidia-smi.")
         if self.layout.config_path.exists():
             try:
                 config = self.load_config()
                 self.validate_config(config)
+                messages.append(f"Using llama-server binary: {self.resolve_binary_path(config)}")
             except ServerManagerError as exc:
                 ok = False
                 messages.append(str(exc))
@@ -168,15 +197,36 @@ class ServerManager:
         ensure_layout(self.layout)
         config = self.load_config()
         self.validate_config(config)
-        if not self.layout.binary_path.exists():
-            raise ServerManagerError(f"llama-server binary not found: {self.layout.binary_path}")
         if self.is_running():
             raise ServerManagerError("llama-server is already running.")
         command = self.render_command(config)
         log_handle = self.layout.log_path.open("a", encoding="utf-8")
-        process = subprocess.Popen(command, stdout=log_handle, stderr=subprocess.STDOUT, start_new_session=True)
+        env = os.environ.copy()
+        binary_dir = str(Path(command[0]).resolve().parent)
+        current_ld_library_path = env.get("LD_LIBRARY_PATH", "")
+        env["LD_LIBRARY_PATH"] = f"{binary_dir}:{current_ld_library_path}" if current_ld_library_path else binary_dir
+        process = subprocess.Popen(
+            command,
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+            env=env,
+        )
+        time.sleep(2)
+        if process.poll() is not None:
+            log_handle.close()
+            tail = self.logs(lines=40)
+            raise ServerManagerError(
+                "llama-server exited during startup.\n"
+                f"Log file: {self.layout.log_path}\n"
+                f"{tail or 'No logs captured.'}"
+            )
         self.layout.pid_path.write_text(str(process.pid), encoding="utf-8")
-        return f"Started llama-server with PID {process.pid}"
+        return (
+            f"Started llama-server with PID {process.pid}\n"
+            f"Binary: {command[0]}\n"
+            f"Log: {self.layout.log_path}"
+        )
 
     def stop(self) -> str:
         pid = self._read_pid()
@@ -203,8 +253,10 @@ class ServerManager:
     def status(self) -> str:
         pid = self._read_pid()
         if pid is None:
-            return "llama-server is stopped"
-        return f"llama-server is running with PID {pid}" if self.is_running() else "llama-server is stopped"
+            return f"llama-server is stopped\nConfig: {self.layout.config_path}\nLog: {self.layout.log_path}"
+        if self.is_running():
+            return f"llama-server is running with PID {pid}\nConfig: {self.layout.config_path}\nLog: {self.layout.log_path}"
+        return f"llama-server is stopped\nConfig: {self.layout.config_path}\nLog: {self.layout.log_path}"
 
     def logs(self, lines: int = 50) -> str:
         if not self.layout.log_path.exists():
@@ -225,3 +277,10 @@ class ServerManager:
         completed = subprocess.run(command, check=False)
         if completed.returncode != 0:
             raise ServerManagerError(f"Command failed with exit code {completed.returncode}: {' '.join(command)}")
+
+    @staticmethod
+    def _parse_cuda_release(version_output: str) -> tuple[int, int] | None:
+        match = re.search(r"release\s+(\d+)\.(\d+)", version_output)
+        if not match:
+            return None
+        return int(match.group(1)), int(match.group(2))
