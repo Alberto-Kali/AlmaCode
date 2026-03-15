@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 from typing import Any
 from urllib import error, request
@@ -25,10 +26,17 @@ class ContextOverflowError(ModelLoadError):
     details: str
 
 
+@dataclass(slots=True)
+class TransientServerError(ModelLoadError):
+    status_code: int
+    details: str
+
+
 class LlamaBackend:
     def __init__(self, config: AgentConfig) -> None:
         self._config = config
         self._healthcheck()
+        self._hydrate_server_limits()
 
     def complete(self, messages: list[dict[str, Any]]) -> LLMResponse:
         return self.chat(messages, response_format={"type": "json_object"})
@@ -74,6 +82,15 @@ class LlamaBackend:
             "Make sure the server is running and reachable from this machine."
         )
 
+    def _hydrate_server_limits(self) -> None:
+        try:
+            props = self._get_json("/props")
+        except ModelLoadError:
+            return
+        n_ctx = props.get("default_generation_settings", {}).get("n_ctx")
+        if isinstance(n_ctx, int) and n_ctx > 0:
+            self._config.context_window = n_ctx
+
     def _get_json(self, path: str) -> dict[str, Any]:
         url = f"{self._config.server_url}{path}"
         req = request.Request(url, headers=self._headers())
@@ -96,27 +113,40 @@ class LlamaBackend:
             headers=self._headers() | {"Content-Type": "application/json"},
             method="POST",
         )
-        try:
-            with request.urlopen(req, timeout=self._config.request_timeout) as response:
-                return json.loads(response.read().decode("utf-8"))
-        except error.HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="replace")
-            if exc.code == 400:
-                try:
-                    payload = json.loads(body)
-                except json.JSONDecodeError:
-                    payload = None
-                if isinstance(payload, dict):
-                    error_payload = payload.get("error", {})
-                    if error_payload.get("type") == "exceed_context_size_error":
-                        raise ContextOverflowError(
-                            prompt_tokens=int(error_payload.get("n_prompt_tokens", 0)),
-                            context_window=int(error_payload.get("n_ctx", self._config.context_window)),
-                            details=body,
-                        ) from exc
-            raise ModelLoadError(f"HTTP {exc.code} from llama-server {path}: {body}") from exc
-        except error.URLError as exc:
-            raise ModelLoadError(f"Failed to contact llama-server {path}: {exc}") from exc
+        last_error: Exception | None = None
+        for attempt in range(self._config.request_retries + 1):
+            try:
+                with request.urlopen(req, timeout=self._config.request_timeout) as response:
+                    return json.loads(response.read().decode("utf-8"))
+            except error.HTTPError as exc:
+                body = exc.read().decode("utf-8", errors="replace")
+                if exc.code == 400:
+                    try:
+                        payload = json.loads(body)
+                    except json.JSONDecodeError:
+                        payload = None
+                    if isinstance(payload, dict):
+                        error_payload = payload.get("error", {})
+                        if error_payload.get("type") == "exceed_context_size_error":
+                            raise ContextOverflowError(
+                                prompt_tokens=int(error_payload.get("n_prompt_tokens", 0)),
+                                context_window=int(error_payload.get("n_ctx", self._config.context_window)),
+                                details=body,
+                            ) from exc
+                if exc.code in {502, 503, 504} and attempt < self._config.request_retries:
+                    last_error = TransientServerError(status_code=exc.code, details=body)
+                    time.sleep(0.6 * (attempt + 1))
+                    continue
+                raise ModelLoadError(f"HTTP {exc.code} from llama-server {path}: {body}") from exc
+            except error.URLError as exc:
+                if attempt < self._config.request_retries:
+                    last_error = exc
+                    time.sleep(0.6 * (attempt + 1))
+                    continue
+                raise ModelLoadError(f"Failed to contact llama-server {path}: {exc}") from exc
+        if last_error:
+            raise ModelLoadError(f"Failed to contact llama-server {path}: {last_error}")
+        raise ModelLoadError(f"Failed to contact llama-server {path}")
 
     def _headers(self) -> dict[str, str]:
         headers = {"Accept": "application/json"}

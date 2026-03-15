@@ -131,12 +131,14 @@ class CodingAgent:
         image_refs: list[str] | None = None,
     ) -> str:
         active_session = session or AgentSession()
+        active_session.last_user_task = task
         system_prompt = build_system_prompt(
             workspace=str(self._config.workspace),
             command_timeout=self._config.command_timeout,
             system_note=self._config.system_note,
         )
         user_message = build_user_message(task, image_refs=image_refs)
+        active_session.append_message(user_message)
 
         for step in range(1, self._config.max_steps + 1):
             self._compact_if_needed(active_session, system_prompt, task, user_message)
@@ -155,7 +157,7 @@ class CodingAgent:
                         "Compressing session memory and retrying."
                     ),
                 )
-                self._recover_from_overflow(active_session, system_prompt, task)
+                self._recover_from_overflow(active_session, system_prompt, task, user_message)
                 continue
             except ModelLoadError:
                 raise
@@ -222,11 +224,18 @@ class CodingAgent:
             system_prompt=system_prompt,
             current_task=task,
             summary_max_tokens=self._config.summary_max_tokens,
-            history_tail_messages=max(2, self._config.history_tail_messages),
+            history_tail_messages=max(4, self._config.history_tail_messages),
         )
+        self._ensure_current_prompt_at_end(session, user_message)
         self._emit("context", session.summary or "[empty summary]")
 
-    def _recover_from_overflow(self, session: AgentSession, system_prompt: str, task: str) -> None:
+    def _recover_from_overflow(
+        self,
+        session: AgentSession,
+        system_prompt: str,
+        task: str,
+        user_message: dict[str, Any],
+    ) -> None:
         try:
             session.compact(
                 backend=self._backend,
@@ -234,12 +243,19 @@ class CodingAgent:
                 system_prompt=system_prompt,
                 current_task=task,
                 summary_max_tokens=self._config.summary_max_tokens,
-                history_tail_messages=max(2, self._config.history_tail_messages),
+                history_tail_messages=max(4, self._config.history_tail_messages),
             )
         except ModelLoadError:
-            session.hard_reset(current_task=task, history_tail_messages=2)
+            session.hard_reset(current_task=task, history_tail_messages=4)
             self._emit("status", "Summary compaction failed. Falling back to a minimal session memory.")
+        self._ensure_current_prompt_at_end(session, user_message)
         self._emit("context", session.summary or "[empty summary]")
+
+    @staticmethod
+    def _ensure_current_prompt_at_end(session: AgentSession, user_message: dict[str, Any]) -> None:
+        filtered_history = [message for message in session.recent_history if message != user_message]
+        filtered_history.append(user_message)
+        session.recent_history = filtered_history
 
     def _emit(self, kind: str, message: str) -> None:
         if kind == "thought":

@@ -39,6 +39,7 @@ class AgentSession:
     recent_history: list[dict[str, Any]] = field(default_factory=list)
     tool_log: list[str] = field(default_factory=list)
     compactions: int = 0
+    last_user_task: str = ""
 
     def append_message(self, message: dict[str, Any]) -> None:
         self.recent_history.append(message)
@@ -71,8 +72,11 @@ class AgentSession:
                     "content": f"Working memory summary for the current session:\n{self.summary.strip()}",
                 }
             )
+        tail_history = self.recent_history[-history_tail_messages:] if history_tail_messages > 0 else []
+        if tail_history and tail_history[-1] == user_message:
+            tail_history = tail_history[:-1]
         if history_tail_messages > 0:
-            messages.extend(self.recent_history[-history_tail_messages:])
+            messages.extend(tail_history)
         messages.append(user_message)
         return messages
 
@@ -113,3 +117,4 @@ class AgentSession:
         parts = [part for part in [self.summary.strip(), f"Current task: {current_task}", short_log] if part]
         self.summary = "\n".join(parts)[-3000:]
         self.recent_history = self.recent_history[-history_tail_messages:] if history_tail_messages > 0 else []
+        self.last_user_task = current_task

@@ -41,6 +41,7 @@ class AgentConfig:
     context_soft_limit_ratio: float = 0.82
     summary_max_tokens: int = 256
     history_tail_messages: int = 4
+    request_retries: int = 2
 
 
 def build_server_url(server_url: str | None, server_host: str | None, server_port: int | None) -> str:

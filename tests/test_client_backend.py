@@ -18,6 +18,12 @@ class _Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b"{}")
             return
+        if self.path == "/props":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{\"default_generation_settings\":{\"n_ctx\":8192}}')
+            return
         self.send_response(404)
         self.end_headers()
 
@@ -93,6 +99,7 @@ def test_config_from_args_rejects_deprecated_runtime_flags() -> None:
 def test_http_backend_completion(test_server: str, tmp_path: Path) -> None:
     config = AgentConfig(workspace=tmp_path, server_url=test_server)
     backend = LlamaBackend(config)
+    assert config.context_window == 8192
     response = backend.complete([{"role": "user", "content": "hi"}])
     assert '"tool": "final_answer"' in response.content
 

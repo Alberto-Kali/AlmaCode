@@ -41,3 +41,4 @@ def test_agent_recovers_from_context_overflow(tmp_path: Path) -> None:
     assert answer == "ok"
     assert backend.summary_calls == 1
     assert session.summary == "short memory"
+    assert session.recent_history[-2]["role"] == "user"

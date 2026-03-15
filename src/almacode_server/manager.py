@@ -58,6 +58,7 @@ class ServerManager:
             "--ubatch-size",
             str(config.runtime.ubatch_size),
             "--jinja",
+            "--no-mmap",
         ]
         if config.runtime.flash_attn:
             command.extend(["--flash-attn", "on"])
@@ -77,8 +78,6 @@ class ServerManager:
             command.extend(["--cache-type-k", config.advanced.cache_type_k, "--cache-type-v", config.advanced.cache_type_v])
         if config.advanced.numa:
             command.extend(["--numa", "distribute"])
-        if config.advanced.no_mmap:
-            command.append("--no-mmap")
         if config.advanced.mlock:
             command.append("--mlock")
         command.extend(config.advanced.extra_flags)

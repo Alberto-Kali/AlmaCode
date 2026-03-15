@@ -34,3 +34,4 @@ def test_session_hard_reset_preserves_short_memory() -> None:
     session.hard_reset(current_task="finish task", history_tail_messages=2)
     assert "finish task" in session.summary
     assert len(session.recent_history) == 2
+    assert session.last_user_task == "finish task"

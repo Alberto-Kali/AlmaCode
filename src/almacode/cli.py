@@ -111,6 +111,7 @@ def config_from_args(args: argparse.Namespace) -> AgentConfig:
         context_soft_limit_ratio=0.82,
         summary_max_tokens=256,
         history_tail_messages=4,
+        request_retries=2,
     )
 
 
