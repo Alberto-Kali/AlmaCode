@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from almacode.cli import build_parser, config_from_args
-from almacode.config import AgentConfig, deprecated_runtime_flags, resolve_client_settings
+from almacode.config import AgentConfig, ClientSettings, autodetect_server_url, deprecated_runtime_flags, resolve_client_settings, save_client_settings
 from almacode.llm import LlamaBackend, ModelLoadError
 
 
@@ -68,6 +68,14 @@ def test_resolve_client_settings_from_file(tmp_path: Path) -> None:
     assert settings.request_timeout == 30
 
 
+def test_save_client_settings(tmp_path: Path) -> None:
+    config_path = tmp_path / "client.json"
+    saved = save_client_settings(ClientSettings(server_url="http://127.0.0.1:8080"), config_path=config_path)
+    assert saved == config_path
+    payload = json.loads(config_path.read_text(encoding="utf-8"))
+    assert payload["server_url"] == "http://127.0.0.1:8080"
+
+
 def test_deprecated_runtime_flags_are_detected() -> None:
     parser = build_parser()
     args = parser.parse_args(["run", "--model", "/tmp/model.gguf", "hello"])
@@ -87,6 +95,11 @@ def test_http_backend_completion(test_server: str, tmp_path: Path) -> None:
     backend = LlamaBackend(config)
     response = backend.complete([{"role": "user", "content": "hi"}])
     assert '"tool": "final_answer"' in response.content
+
+
+def test_autodetect_server_url(test_server: str) -> None:
+    detected = autodetect_server_url(candidates=[test_server])
+    assert detected == test_server
 
 
 def test_http_backend_health_failure(tmp_path: Path) -> None:

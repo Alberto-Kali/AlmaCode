@@ -7,7 +7,7 @@ from rich.console import Console
 from rich.prompt import Prompt
 
 from almacode.agent import CodingAgent
-from almacode.config import AgentConfig, deprecated_runtime_flags, resolve_client_settings
+from almacode.config import AgentConfig, ClientSettings, autodetect_server_url, deprecated_runtime_flags, resolve_client_settings, save_client_settings
 from almacode.llm import LlamaBackend, ModelLoadError
 from almacode.tools import WorkspaceTools
 
@@ -49,6 +49,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     chat_parser = subparsers.add_parser("chat", parents=[common], help="Start an interactive session")
     chat_parser.add_argument("--opening-task", default="", help="Optional first task to execute")
+
+    init_parser = subparsers.add_parser("init-client", help="Write ~/.config/almacode/client.json")
+    init_parser.add_argument("--server-url", default=None, help="llama-server base URL")
+    init_parser.add_argument("--api-key", default=None, help="Optional bearer token")
+    init_parser.add_argument("--request-timeout", type=int, default=120, help="HTTP timeout in seconds")
+    init_parser.add_argument("--force", action="store_true", help="Overwrite existing client config")
 
     return parser
 
@@ -104,6 +110,26 @@ def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
     console = Console()
+    if args.command == "init-client":
+        detected = (args.server_url or "").strip() or autodetect_server_url(timeout=args.request_timeout)
+        if not detected:
+            console.print(
+                "[bold red]Startup failed[/bold red]\n"
+                "Could not auto-detect a local llama-server.\n"
+                "Pass --server-url explicitly."
+            )
+            return 2
+        try:
+            config_path = save_client_settings(
+                ClientSettings(server_url=detected, api_key=args.api_key, request_timeout=args.request_timeout),
+                overwrite=args.force,
+            )
+        except ValueError as exc:
+            console.print(f"[bold red]Startup failed[/bold red]\n{exc}")
+            return 2
+        console.print(f"Wrote client config to {config_path}\nServer URL: {detected}")
+        return 0
+
     try:
         agent = build_agent(args, console)
     except (ModelLoadError, ValueError) as exc:

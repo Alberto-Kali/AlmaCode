@@ -5,9 +5,16 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib import error, request
 
 
 CLIENT_CONFIG_PATH = Path.home() / ".config" / "almacode" / "client.json"
+DEFAULT_SERVER_CANDIDATES = [
+    "http://127.0.0.1:8080",
+    "http://localhost:8080",
+    "http://127.0.0.1:8000",
+    "http://localhost:8000",
+]
 
 
 @dataclass(slots=True)
@@ -46,6 +53,39 @@ def load_client_settings(config_path: Path = CLIENT_CONFIG_PATH) -> ClientSettin
     return ClientSettings(server_url=server_url, api_key=api_key, request_timeout=request_timeout)
 
 
+def save_client_settings(settings: ClientSettings, config_path: Path = CLIENT_CONFIG_PATH, *, overwrite: bool = False) -> Path:
+    config_path = config_path.expanduser().resolve()
+    if config_path.exists() and not overwrite:
+        raise ValueError(f"Client config already exists: {config_path}")
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "server_url": settings.server_url,
+        "api_key": settings.api_key,
+        "request_timeout": settings.request_timeout,
+    }
+    config_path.write_text(json.dumps(payload, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+    return config_path
+
+
+def _server_looks_alive(server_url: str, timeout: int) -> bool:
+    for path in ("/health", "/v1/models"):
+        req = request.Request(f"{server_url.rstrip('/')}{path}", headers={"Accept": "application/json"})
+        try:
+            with request.urlopen(req, timeout=timeout) as response:
+                if 200 <= response.status < 300:
+                    return True
+        except (error.URLError, error.HTTPError):
+            continue
+    return False
+
+
+def autodetect_server_url(timeout: int = 2, candidates: list[str] | None = None) -> str | None:
+    for server_url in candidates or DEFAULT_SERVER_CANDIDATES:
+        if _server_looks_alive(server_url, timeout):
+            return server_url.rstrip("/")
+    return None
+
+
 def resolve_client_settings(
     server_url: str | None,
     api_key: str | None,
@@ -57,6 +97,7 @@ def resolve_client_settings(
         (server_url or "").strip()
         or os.environ.get("ALMACODE_SERVER_URL", "").strip()
         or (file_settings.server_url if file_settings else "")
+        or (autodetect_server_url(timeout=request_timeout or (file_settings.request_timeout if file_settings else 2)) or "")
     )
     resolved_api_key = api_key or os.environ.get("ALMACODE_API_KEY") or (file_settings.api_key if file_settings else None)
     resolved_request_timeout = request_timeout or (file_settings.request_timeout if file_settings else 120)
