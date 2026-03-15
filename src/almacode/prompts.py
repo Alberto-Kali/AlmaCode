@@ -57,3 +57,49 @@ def build_tool_feedback(tool_name: str, payload: str) -> str:
         """
     ).strip()
 
+
+def build_summary_prompt(
+    workspace: str,
+    current_task: str,
+    summary: str,
+    recent_history: list[dict[str, object]],
+    tool_log: list[str],
+) -> str:
+    history_lines: list[str] = []
+    for message in recent_history[-8:]:
+        role = str(message.get("role", "unknown"))
+        content = str(message.get("content", ""))
+        history_lines.append(f"{role}: {content[:1200]}")
+
+    joined_history = "\n".join(history_lines) if history_lines else "[no recent history]"
+    joined_tool_log = "\n".join(tool_log[-12:]) if tool_log else "[no tool log]"
+    summary_block = summary.strip() if summary.strip() else "[empty summary]"
+
+    return dedent(
+        f"""
+        You are compressing the working memory of AlmaCode so a coding session can continue inside a small context window.
+
+        Workspace: {workspace}
+        Current task: {current_task}
+
+        Existing summary:
+        {summary_block}
+
+        Recent conversation tail:
+        {joined_history}
+
+        Recent tool log:
+        {joined_tool_log}
+
+        Write a short structured memory summary that preserves only the facts needed to continue the task.
+        Include:
+        - goal
+        - what was already done
+        - files or artifacts that matter
+        - decisions already made
+        - open work
+        - important failures or caveats
+
+        Keep it concise. Omit verbose tool output. Do not use Markdown code fences.
+        """
+    ).strip()

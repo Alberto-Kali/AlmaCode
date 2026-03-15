@@ -37,6 +37,22 @@ class AgentConfig:
     command_timeout: int = 60
     verbose: bool = False
     system_note: str = ""
+    context_window: int = 4096
+    context_soft_limit_ratio: float = 0.82
+    summary_max_tokens: int = 256
+    history_tail_messages: int = 4
+
+
+def build_server_url(server_url: str | None, server_host: str | None, server_port: int | None) -> str:
+    trimmed_url = (server_url or "").strip()
+    if trimmed_url:
+        return trimmed_url.rstrip("/")
+    trimmed_host = (server_host or "").strip()
+    if trimmed_host or server_port is not None:
+        host = trimmed_host or "127.0.0.1"
+        port = server_port or 8080
+        return f"http://{host}:{port}"
+    return ""
 
 
 def load_client_settings(config_path: Path = CLIENT_CONFIG_PATH) -> ClientSettings | None:
@@ -88,13 +104,15 @@ def autodetect_server_url(timeout: int = 2, candidates: list[str] | None = None)
 
 def resolve_client_settings(
     server_url: str | None,
+    server_host: str | None,
+    server_port: int | None,
     api_key: str | None,
     request_timeout: int | None,
     config_path: Path = CLIENT_CONFIG_PATH,
 ) -> ClientSettings:
     file_settings = load_client_settings(config_path)
     resolved_server_url = (
-        (server_url or "").strip()
+        build_server_url(server_url, server_host, server_port)
         or os.environ.get("ALMACODE_SERVER_URL", "").strip()
         or (file_settings.server_url if file_settings else "")
         or (autodetect_server_url(timeout=request_timeout or (file_settings.request_timeout if file_settings else 2)) or "")

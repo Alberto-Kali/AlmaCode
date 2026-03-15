@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "almacode"
-version = "0.4.0"
+version = "0.5.0"
 description = "CLI coding agent for llama-server"
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
@@ -13,7 +13,8 @@ authors = [
   { name = "Alberto Kali" }
 ]
 dependencies = [
-  "rich>=13.7.1"
+  "rich>=13.7.1",
+  "textual>=0.79.0"
 ]
 
 [project.optional-dependencies]

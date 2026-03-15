@@ -18,19 +18,40 @@ class ModelLoadError(RuntimeError):
     pass
 
 
+@dataclass(slots=True)
+class ContextOverflowError(ModelLoadError):
+    prompt_tokens: int
+    context_window: int
+    details: str
+
+
 class LlamaBackend:
     def __init__(self, config: AgentConfig) -> None:
         self._config = config
         self._healthcheck()
 
     def complete(self, messages: list[dict[str, Any]]) -> LLMResponse:
+        return self.chat(messages, response_format={"type": "json_object"})
+
+    def summarize(self, messages: list[dict[str, Any]], max_tokens: int) -> str:
+        response = self.chat(messages, max_tokens=max_tokens, response_format=None)
+        return response.content
+
+    def chat(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        max_tokens: int | None = None,
+        response_format: dict[str, Any] | None = None,
+    ) -> LLMResponse:
         payload = {
             "messages": messages,
             "temperature": self._config.temperature,
             "top_p": self._config.top_p,
-            "max_tokens": self._config.max_tokens,
-            "response_format": {"type": "json_object"},
+            "max_tokens": max_tokens or self._config.max_tokens,
         }
+        if response_format is not None:
+            payload["response_format"] = response_format
         response = self._post_json("/v1/chat/completions", payload)
         try:
             choice = response["choices"][0]["message"]["content"]
@@ -80,6 +101,19 @@ class LlamaBackend:
                 return json.loads(response.read().decode("utf-8"))
         except error.HTTPError as exc:
             body = exc.read().decode("utf-8", errors="replace")
+            if exc.code == 400:
+                try:
+                    payload = json.loads(body)
+                except json.JSONDecodeError:
+                    payload = None
+                if isinstance(payload, dict):
+                    error_payload = payload.get("error", {})
+                    if error_payload.get("type") == "exceed_context_size_error":
+                        raise ContextOverflowError(
+                            prompt_tokens=int(error_payload.get("n_prompt_tokens", 0)),
+                            context_window=int(error_payload.get("n_ctx", self._config.context_window)),
+                            details=body,
+                        ) from exc
             raise ModelLoadError(f"HTTP {exc.code} from llama-server {path}: {body}") from exc
         except error.URLError as exc:
             raise ModelLoadError(f"Failed to contact llama-server {path}: {exc}") from exc

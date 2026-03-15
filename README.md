@@ -52,7 +52,8 @@ Example config:
 
 ```bash
 almacode run \
-  --server-url http://127.0.0.1:8080 \
+  --server-host 127.0.0.1 \
+  --server-port 8080 \
   --workspace . \
   "Inspect the repo and write a tiny hello world example."
 ```
@@ -60,8 +61,20 @@ almacode run \
 4. Start interactive chat:
 
 ```bash
-almacode chat --server-url http://127.0.0.1:8080 --workspace .
+almacode chat --server-host 127.0.0.1 --server-port 8080 --workspace .
 ```
+
+`almacode chat` now starts a Textual TUI by default. Use `almacode chat --plain` for the legacy line-by-line mode.
+
+## Context compaction
+
+The client now auto-compacts long sessions before they hit the server context limit:
+
+- it keeps a short working-memory summary
+- it preserves only a small recent tail of messages
+- if the context is still too large, it falls back to a minimal dev-log summary and continues
+
+This prevents long coding sessions from crashing on `exceed_context_size_error`.
 
 ## Multimodal client usage
 

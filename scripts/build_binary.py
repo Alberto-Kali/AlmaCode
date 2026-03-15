@@ -18,6 +18,8 @@ def main() -> int:
         "--onefile",
         "--name",
         "almacode",
+        "--collect-all",
+        "textual",
         "--paths",
         str(ROOT / "src"),
         str(ROOT / "src" / "almacode" / "__main__.py"),

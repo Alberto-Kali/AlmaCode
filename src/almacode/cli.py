@@ -7,8 +7,17 @@ from rich.console import Console
 from rich.prompt import Prompt
 
 from almacode.agent import CodingAgent
-from almacode.config import AgentConfig, ClientSettings, autodetect_server_url, deprecated_runtime_flags, resolve_client_settings, save_client_settings
+from almacode.config import (
+    AgentConfig,
+    ClientSettings,
+    autodetect_server_url,
+    build_server_url,
+    deprecated_runtime_flags,
+    resolve_client_settings,
+    save_client_settings,
+)
 from almacode.llm import LlamaBackend, ModelLoadError
+from almacode.session import AgentSession
 from almacode.tools import WorkspaceTools
 
 
@@ -18,6 +27,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--server-url", default=None, help="llama-server base URL")
+    common.add_argument("--server-host", default=None, help="llama-server host, used when --server-url is omitted")
+    common.add_argument("--server-port", type=int, default=None, help="llama-server port, used with --server-host")
     common.add_argument("--api-key", default=None, help="Optional bearer token for llama-server")
     common.add_argument("--request-timeout", type=int, default=None, help="HTTP timeout in seconds")
     common.add_argument(
@@ -49,9 +60,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     chat_parser = subparsers.add_parser("chat", parents=[common], help="Start an interactive session")
     chat_parser.add_argument("--opening-task", default="", help="Optional first task to execute")
+    chat_parser.add_argument("--plain", action="store_true", help="Use the legacy line-by-line chat mode")
 
     init_parser = subparsers.add_parser("init-client", help="Write ~/.config/almacode/client.json")
     init_parser.add_argument("--server-url", default=None, help="llama-server base URL")
+    init_parser.add_argument("--server-host", default=None, help="llama-server host, used when --server-url is omitted")
+    init_parser.add_argument("--server-port", type=int, default=None, help="llama-server port, used with --server-host")
     init_parser.add_argument("--api-key", default=None, help="Optional bearer token")
     init_parser.add_argument("--request-timeout", type=int, default=120, help="HTTP timeout in seconds")
     init_parser.add_argument("--force", action="store_true", help="Overwrite existing client config")
@@ -74,7 +88,13 @@ def config_from_args(args: argparse.Namespace) -> AgentConfig:
     if active_flags:
         raise ValueError(deprecated_flags_message(active_flags))
 
-    client = resolve_client_settings(args.server_url, args.api_key, args.request_timeout)
+    client = resolve_client_settings(
+        args.server_url,
+        getattr(args, "server_host", None),
+        getattr(args, "server_port", None),
+        args.api_key,
+        args.request_timeout,
+    )
     return AgentConfig(
         workspace=Path(args.workspace).resolve(),
         server_url=client.server_url,
@@ -87,6 +107,10 @@ def config_from_args(args: argparse.Namespace) -> AgentConfig:
         command_timeout=args.command_timeout,
         verbose=args.verbose,
         system_note=args.system_note,
+        context_window=4096,
+        context_soft_limit_ratio=0.82,
+        summary_max_tokens=256,
+        history_tail_messages=4,
     )
 
 
@@ -97,13 +121,8 @@ def build_agent(args: argparse.Namespace, console: Console) -> CodingAgent:
     return CodingAgent(config=config, backend=backend, tools=tools, console=console)
 
 
-def run_once(
-    agent: CodingAgent,
-    task: str,
-    history: list[dict[str, object]] | None = None,
-    image_refs: list[str] | None = None,
-) -> str:
-    return agent.run(task, history=history, image_refs=image_refs)
+def run_once(agent: CodingAgent, task: str, session: AgentSession | None = None, image_refs: list[str] | None = None) -> str:
+    return agent.run(task, session=session, image_refs=image_refs)
 
 
 def main() -> int:
@@ -111,7 +130,7 @@ def main() -> int:
     args = parser.parse_args()
     console = Console()
     if args.command == "init-client":
-        detected = (args.server_url or "").strip() or autodetect_server_url(timeout=args.request_timeout)
+        detected = build_server_url(args.server_url, args.server_host, args.server_port) or autodetect_server_url(timeout=args.request_timeout)
         if not detected:
             console.print(
                 "[bold red]Startup failed[/bold red]\n"
@@ -141,17 +160,25 @@ def main() -> int:
         console.print(answer)
         return 0
 
-    history: list[dict[str, object]] = []
+    session = AgentSession()
     active_images = list(args.image)
-    if args.opening_task:
-        answer = run_once(agent, args.opening_task, history=history, image_refs=active_images)
-        console.print(answer)
-        history.extend(
-            [
-                {"role": "user", "content": args.opening_task},
-                {"role": "assistant", "content": answer},
-            ]
+    if not args.plain:
+        from almacode.tui import AlmaCodeApp
+
+        tui_agent = CodingAgent(
+            config=agent._config,
+            backend=agent._backend,
+            tools=agent._tools,
+            console=console,
         )
+        app = AlmaCodeApp(tui_agent, session, initial_images=active_images, opening_task=args.opening_task)
+        tui_agent._event_handler = app.handle_agent_event
+        app.run()
+        return 0
+
+    if args.opening_task:
+        answer = run_once(agent, args.opening_task, session=session, image_refs=active_images)
+        console.print(answer)
 
     console.print("Interactive mode. Type /exit to quit, /image <path...> to set images, /clear-images to unset.")
     while True:
@@ -168,11 +195,5 @@ def main() -> int:
             continue
         if not prompt.strip():
             continue
-        answer = run_once(agent, prompt, history=history, image_refs=active_images)
+        answer = run_once(agent, prompt, session=session, image_refs=active_images)
         console.print(answer)
-        history.extend(
-            [
-                {"role": "user", "content": prompt},
-                {"role": "assistant", "content": answer},
-            ]
-        )
