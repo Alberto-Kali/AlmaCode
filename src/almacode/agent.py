@@ -317,6 +317,10 @@ class CodingAgent:
             path = str(args.get("path", ""))
             if path:
                 lines.append(f"path: {path}")
+        elif tool_name == "web_search":
+            lines.append(f"query: {args.get('query', '')}")
+        elif tool_name == "open_url":
+            lines.append(f"url: {args.get('url', '')}")
         lines.append("result:")
         lines.append(result)
         return "\n".join(lines)
@@ -329,4 +333,8 @@ class CodingAgent:
             lines.append(f"cwd: {args.get('cwd', '.')}")
         elif tool_name in {"read_file", "write_file", "replace_in_file", "make_dir", "list_dir"}:
             lines.append(f"path: {args.get('path', '.')}")
+        elif tool_name == "web_search":
+            lines.append(f"query: {args.get('query', '')}")
+        elif tool_name == "open_url":
+            lines.append(f"url: {args.get('url', '')}")
         return "\n".join(lines)

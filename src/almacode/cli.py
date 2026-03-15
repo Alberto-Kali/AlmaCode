@@ -178,7 +178,7 @@ def main() -> int:
         )
         app = AlmaCodeApp(tui_agent, session, initial_images=active_images, opening_task=args.opening_task)
         tui_agent._event_handler = app.handle_agent_event
-        app.run(mouse=False)
+        app.run()
         return 0
 
     if args.opening_task:

@@ -2,14 +2,47 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 from dataclasses import dataclass
+from html import unescape
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
+from urllib import parse, request
 
 
 class ToolError(RuntimeError):
     pass
+
+
+class _HTMLTextExtractor(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self._parts: list[str] = []
+        self._skip_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag in {"script", "style", "noscript"}:
+            self._skip_depth += 1
+        elif tag in {"p", "div", "section", "article", "h1", "h2", "h3", "h4", "li", "br"}:
+            self._parts.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in {"script", "style", "noscript"} and self._skip_depth:
+            self._skip_depth -= 1
+        elif tag in {"p", "div", "section", "article", "h1", "h2", "h3", "h4", "li"}:
+            self._parts.append("\n")
+
+    def handle_data(self, data: str) -> None:
+        if self._skip_depth == 0:
+            self._parts.append(data)
+
+    def text(self) -> str:
+        cleaned = unescape("".join(self._parts))
+        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+        cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+        return cleaned.strip()
 
 
 @dataclass(slots=True)
@@ -28,6 +61,8 @@ class WorkspaceTools:
             "replace_in_file": self.replace_in_file,
             "make_dir": self.make_dir,
             "run_command": self.run_command,
+            "web_search": self.web_search,
+            "open_url": self.open_url,
         }
         if tool not in dispatch:
             raise ToolError(f"Unknown tool: {tool}")
@@ -136,4 +171,74 @@ class WorkspaceTools:
             "exit_code": completed.returncode,
             "stdout": completed.stdout[-12000:],
             "stderr": completed.stderr[-12000:],
+        }
+
+    def web_search(self, query: str, limit: int = 5) -> dict[str, Any]:
+        if not query.strip():
+            raise ToolError("query must not be empty")
+        if limit < 1 or limit > 10:
+            raise ToolError("limit must be between 1 and 10")
+
+        url = "https://html.duckduckgo.com/html/?" + parse.urlencode({"q": query})
+        req = request.Request(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 AlmaCode/1.0",
+                "Accept-Language": "en-US,en;q=0.8",
+            },
+        )
+        try:
+            with request.urlopen(req, timeout=20) as response:
+                html = response.read().decode("utf-8", errors="replace")
+        except Exception as exc:  # noqa: BLE001
+            raise ToolError(f"Web search failed: {exc}") from exc
+
+        matches = re.findall(
+            r'<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="([^"]+)"[^>]*>(.*?)</a>',
+            html,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        results: list[dict[str, str]] = []
+        for href, raw_title in matches:
+            title = re.sub(r"<.*?>", "", raw_title)
+            title = unescape(title).strip()
+            parsed = parse.urlparse(href)
+            if parsed.netloc.endswith("duckduckgo.com") and parsed.path.startswith("/l/"):
+                target = parse.parse_qs(parsed.query).get("uddg", [href])[0]
+            else:
+                target = href
+            results.append({"title": title, "url": target})
+            if len(results) >= limit:
+                break
+        if not results:
+            raise ToolError("Web search returned no results")
+        return {"query": query, "results": results}
+
+    def open_url(self, url: str, max_chars: int = 12000) -> dict[str, Any]:
+        parsed = parse.urlparse(url)
+        if parsed.scheme not in {"http", "https"}:
+            raise ToolError("url must start with http:// or https://")
+        req = request.Request(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 AlmaCode/1.0",
+                "Accept-Language": "en-US,en;q=0.8",
+            },
+        )
+        try:
+            with request.urlopen(req, timeout=20) as response:
+                content_type = response.headers.get("Content-Type", "")
+                body = response.read().decode("utf-8", errors="replace")
+        except Exception as exc:  # noqa: BLE001
+            raise ToolError(f"Failed to open URL: {exc}") from exc
+
+        extractor = _HTMLTextExtractor()
+        extractor.feed(body)
+        text = extractor.text()
+        if not text and "html" not in content_type.lower():
+            text = body
+        return {
+            "url": url,
+            "content_type": content_type,
+            "text": text[:max_chars],
         }

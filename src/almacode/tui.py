@@ -185,6 +185,8 @@ class AlmaCodeApp(App[None]):
         tool = next((line.split(": ", 1)[1] for line in lines if line.startswith("tool: ")), "tool")
         command = next((line.split(": ", 1)[1] for line in lines if line.startswith("command: ")), "")
         path = next((line.split(": ", 1)[1] for line in lines if line.startswith("path: ")), "")
+        query = next((line.split(": ", 1)[1] for line in lines if line.startswith("query: ")), "")
+        url = next((line.split(": ", 1)[1] for line in lines if line.startswith("url: ")), "")
         result_line = next((line for line in lines if line.startswith("{")), "")
         if tool == "run_command":
             if started:
@@ -203,6 +205,10 @@ class AlmaCodeApp(App[None]):
             return f"[b]Changed file[/b] {path}"
         if tool == "make_dir":
             return f"[b]Created dir[/b] {path}"
+        if tool == "web_search":
+            return f"[b]Web search[/b] {query}"
+        if tool == "open_url":
+            return f"[b]Open URL[/b] {url}"
         return f"[b]Tool[/b] {tool}"
 
     @staticmethod

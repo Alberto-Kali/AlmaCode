@@ -1,4 +1,5 @@
 from pathlib import Path
+from urllib import request
 
 import pytest
 
@@ -34,3 +35,46 @@ def test_replace_in_file_count_zero_replaces_all(tools: WorkspaceTools) -> None:
 def test_path_escape_is_blocked(tools: WorkspaceTools) -> None:
     with pytest.raises(ToolError):
         tools.read_file("../secret.txt")
+
+
+def test_open_url_extracts_text(monkeypatch: pytest.MonkeyPatch, tools: WorkspaceTools) -> None:
+    class _Response:
+        headers = {"Content-Type": "text/html; charset=utf-8"}
+
+        def __enter__(self) -> "_Response":
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return b"<html><body><h1>Hello</h1><p>World</p></body></html>"
+
+    monkeypatch.setattr(request, "urlopen", lambda req, timeout=20: _Response())
+    payload = tools.open_url("https://example.com")
+    assert "Hello" in payload["text"]
+    assert "World" in payload["text"]
+
+
+def test_web_search_parses_results(monkeypatch: pytest.MonkeyPatch, tools: WorkspaceTools) -> None:
+    html = """
+    <html><body>
+    <a class="result__a" href="https://example.com/one">Result One</a>
+    <a class="result__a" href="https://example.com/two">Result Two</a>
+    </body></html>
+    """
+
+    class _Response:
+        def __enter__(self) -> "_Response":
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return html.encode("utf-8")
+
+    monkeypatch.setattr(request, "urlopen", lambda req, timeout=20: _Response())
+    payload = tools.web_search("test", limit=2)
+    assert payload["results"][0]["title"] == "Result One"
+    assert payload["results"][1]["url"] == "https://example.com/two"
