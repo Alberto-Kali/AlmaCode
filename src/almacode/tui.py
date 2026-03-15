@@ -19,6 +19,7 @@ class AlmaCodeApp(App[None]):
 
     BINDINGS = [
         ("ctrl+c", "quit", "Quit"),
+        ("ctrl+shift+c", "copy_current_tab", "Copy"),
         ("f1", "show_chat", "Chat"),
         ("f2", "show_status", "Status"),
         ("f3", "show_logs", "Logs"),
@@ -37,6 +38,9 @@ class AlmaCodeApp(App[None]):
         self._session = session
         self._active_images = list(initial_images or [])
         self._opening_task = opening_task
+        self._chat_plain_lines: list[str] = []
+        self._tool_plain_lines: list[str] = []
+        self._last_chat_group = ""
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -74,6 +78,20 @@ class AlmaCodeApp(App[None]):
 
     def action_show_context(self) -> None:
         self.query_one(TabbedContent).active = "context"
+
+    def action_copy_current_tab(self) -> None:
+        active = self.query_one(TabbedContent).active
+        if active == "chat":
+            content = "\n".join(self._chat_plain_lines)
+        elif active == "logs":
+            content = "\n".join(self._tool_plain_lines)
+        elif active == "status":
+            content = self.query_one("#status-view", Static).renderable
+        else:
+            content = self.query_one("#context-view", Static).renderable
+        text = str(content)
+        self.copy_to_clipboard(text)
+        self.notify("Copied current tab to clipboard")
 
     @on(Input.Submitted, "#prompt")
     def handle_submit(self, event: Input.Submitted) -> None:
@@ -113,10 +131,13 @@ class AlmaCodeApp(App[None]):
 
     def _handle_agent_event_main(self, kind: str, message: str) -> None:
         if kind in {"thought", "status", "final", "error"}:
-            self._write_chat(f"[{kind}] {message}")
+            self._write_chat(f"[{kind}] {message}", group=kind)
+        if kind == "tool_start":
+            self._write_chat(self._tool_summary_for_chat(message, started=True), group="tool")
         if kind == "tool":
             self.query_one("#tool-log", RichLog).write(message)
-            self._write_chat(self._tool_summary_for_chat(message))
+            self._tool_plain_lines.extend(["", message])
+            self._write_chat(self._tool_summary_for_chat(message, started=False), group="tool")
         if kind == "context":
             self.query_one("#context-view", Static).update(message)
         if kind == "status":
@@ -125,8 +146,14 @@ class AlmaCodeApp(App[None]):
             self.query_one("#status-view", Static).update(message)
         self._refresh_status()
 
-    def _write_chat(self, message: str) -> None:
-        self.query_one("#chat-log", RichLog).write(message)
+    def _write_chat(self, message: str, group: str = "") -> None:
+        chat_log = self.query_one("#chat-log", RichLog)
+        if group and group != self._last_chat_group:
+            chat_log.write("")
+            self._chat_plain_lines.append("")
+        chat_log.write(message)
+        self._chat_plain_lines.append(self._strip_markup(message))
+        self._last_chat_group = group or self._last_chat_group
 
     def _refresh_status(self) -> None:
         images = ", ".join(self._active_images) if self._active_images else "none"
@@ -153,13 +180,36 @@ class AlmaCodeApp(App[None]):
         self.query_one("#context-view", Static).update(self._session.summary or "[no working-memory summary yet]")
 
     @staticmethod
-    def _tool_summary_for_chat(message: str) -> str:
+    def _tool_summary_for_chat(message: str, *, started: bool) -> str:
         lines = message.splitlines()
         tool = next((line.split(": ", 1)[1] for line in lines if line.startswith("tool: ")), "tool")
         command = next((line.split(": ", 1)[1] for line in lines if line.startswith("command: ")), "")
         path = next((line.split(": ", 1)[1] for line in lines if line.startswith("path: ")), "")
-        if command:
-            return f"[tool] {tool}: {command}"
-        if path:
-            return f"[tool] {tool}: {path}"
-        return f"[tool] {tool}"
+        result_line = next((line for line in lines if line.startswith("{")), "")
+        if tool == "run_command":
+            if started:
+                return f"[b]Command[/b] {command}"
+            exit_code = "?"
+            if '"exit_code":' in message:
+                exit_code = message.split('"exit_code":', 1)[1].split(",", 1)[0].strip()
+            return f"[b]Command done[/b] {command} (exit {exit_code})"
+        if tool == "read_file":
+            return f"[b]Read file[/b] {path}"
+        if tool == "list_dir":
+            return f"[b]List dir[/b] {path}"
+        if tool == "write_file":
+            return f"[b]Wrote file[/b] {path}"
+        if tool == "replace_in_file":
+            return f"[b]Changed file[/b] {path}"
+        if tool == "make_dir":
+            return f"[b]Created dir[/b] {path}"
+        return f"[b]Tool[/b] {tool}"
+
+    @staticmethod
+    def _strip_markup(message: str) -> str:
+        return (
+            message.replace("[b]", "")
+            .replace("[/b]", "")
+            .replace("[you]", "you:")
+            .replace("[tool]", "tool:")
+        )

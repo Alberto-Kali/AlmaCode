@@ -65,3 +65,35 @@ def test_agent_breaks_repeated_step_loop(tmp_path: Path) -> None:
     )
     with pytest.raises(StepLimitReachedError):
         agent.run("loop please", session=AgentSession())
+
+
+class _ToolStartBackend:
+    def complete(self, messages: list[dict[str, object]]) -> LLMResponse:
+        if len(messages) < 3:
+            return LLMResponse(
+                content='{"thought":"inspect file","action":{"tool":"read_file","args":{"path":"hello.txt"}}}',
+                raw={},
+            )
+        return LLMResponse(
+            content='{"thought":"done","action":{"tool":"final_answer","args":{"answer":"ok"}}}',
+            raw={},
+        )
+
+    def summarize(self, messages: list[dict[str, object]], max_tokens: int) -> str:
+        return "summary"
+
+
+def test_agent_emits_tool_start_and_result(tmp_path: Path) -> None:
+    (tmp_path / "hello.txt").write_text("hi", encoding="utf-8")
+    events: list[tuple[str, str]] = []
+    agent = CodingAgent(
+        config=AgentConfig(workspace=tmp_path, server_url="http://127.0.0.1:8080", max_steps=4),
+        backend=_ToolStartBackend(),  # type: ignore[arg-type]
+        tools=WorkspaceTools(root=tmp_path, default_timeout=5),
+        console=Console(record=True),
+        event_handler=lambda kind, message: events.append((kind, message)),
+    )
+    answer = agent.run("read the file", session=AgentSession())
+    assert answer == "ok"
+    assert any(kind == "tool_start" and "read_file" in message for kind, message in events)
+    assert any(kind == "tool" and "read_file" in message for kind, message in events)

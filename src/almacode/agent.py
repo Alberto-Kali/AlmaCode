@@ -227,6 +227,7 @@ class CodingAgent:
                 self._emit("final", answer)
                 return answer
 
+            self._emit("tool_start", self._format_tool_start(action.tool, action.args))
             try:
                 result = self._tools.execute(action.tool, action.args)
             except ToolError as exc:
@@ -318,4 +319,14 @@ class CodingAgent:
                 lines.append(f"path: {path}")
         lines.append("result:")
         lines.append(result)
+        return "\n".join(lines)
+
+    @staticmethod
+    def _format_tool_start(tool_name: str, args: dict[str, Any]) -> str:
+        lines = [f"tool: {tool_name}"]
+        if tool_name == "run_command":
+            lines.append(f"command: {args.get('command', '')}")
+            lines.append(f"cwd: {args.get('cwd', '.')}")
+        elif tool_name in {"read_file", "write_file", "replace_in_file", "make_dir", "list_dir"}:
+            lines.append(f"path: {args.get('path', '.')}")
         return "\n".join(lines)
