@@ -12,6 +12,7 @@ from rich.console import Console
 from almacode.config import AgentConfig
 from almacode.llm import ContextOverflowError, LlamaBackend, ModelLoadError
 from almacode.prompts import (
+    build_command_output_summary_prompt,
     build_plan_prompt,
     build_research_summary_prompt,
     build_step_prompt,
@@ -35,6 +36,10 @@ class AgentRuntimeError(RuntimeError):
 
 class StepLimitReachedError(AgentRuntimeError):
     pass
+
+
+COMMAND_OUTPUT_WINDOW_CHARS = 4000
+COMMAND_OUTPUT_FEEDBACK_CHARS = 800
 
 
 def _image_ref_to_url(image_ref: str) -> str:
@@ -287,6 +292,7 @@ class CodingAgent:
             research_note = self._research_from_failure(task, current_step, action.tool, action.args, result)
             if research_note:
                 result = f"{result}\n\nResearch note:\n{research_note}"
+            result = self._prepare_result_for_context(action.tool, result)
 
             active_session.append_message({"role": "assistant", "content": response.content})
             active_session.append_message({"role": "user", "content": build_tool_feedback(action.tool, result)})
@@ -446,6 +452,97 @@ class CodingAgent:
         if session.research_summary:
             lines.extend(["", "Research summary:", session.research_summary])
         return "\n".join(lines).strip()
+
+    def _prepare_result_for_context(self, tool_name: str, result: str) -> str:
+        if tool_name != "run_command":
+            return result
+        return self._compact_command_result(result)
+
+    def _compact_command_result(self, result: str) -> str:
+        try:
+            payload = json.loads(result)
+        except json.JSONDecodeError:
+            return result
+
+        stdout = str(payload.get("stdout", ""))
+        stderr = str(payload.get("stderr", ""))
+        rendered_output = self._render_command_output(stdout, stderr)
+        if rendered_output.strip():
+            output_window = rendered_output
+            output_truncated = False
+            if len(rendered_output) > COMMAND_OUTPUT_WINDOW_CHARS:
+                output_window = rendered_output[-COMMAND_OUTPUT_WINDOW_CHARS:]
+                output_truncated = True
+            payload["output_summary"] = self._summarize_command_output(
+                command=str(payload.get("command", "")),
+                cwd=str(payload.get("cwd", ".")),
+                exit_code=payload.get("exit_code", "?"),
+                output_text=output_window,
+                output_truncated=output_truncated,
+            )
+            payload["output_window_chars"] = len(output_window)
+            payload["output_original_chars"] = len(rendered_output)
+            payload["output_truncated"] = output_truncated
+
+        payload["stdout"] = self._trim_command_stream(stdout)
+        payload["stderr"] = self._trim_command_stream(stderr)
+        return json.dumps(payload, ensure_ascii=True, indent=2)
+
+    def _summarize_command_output(
+        self,
+        *,
+        command: str,
+        cwd: str,
+        exit_code: int | str,
+        output_text: str,
+        output_truncated: bool,
+    ) -> str:
+        prompt = build_command_output_summary_prompt(
+            command=command,
+            cwd=cwd,
+            exit_code=exit_code,
+            output_text=output_text,
+            output_truncated=output_truncated,
+        )
+        try:
+            summary = self._backend.summarize(
+                [
+                    {"role": "system", "content": "Return only a concise command-output summary."},
+                    {"role": "user", "content": prompt},
+                ],
+                max_tokens=min(220, self._config.summary_max_tokens),
+            )
+            summary = summary.strip()
+            if summary:
+                return summary
+        except Exception:  # noqa: BLE001
+            pass
+        return self._heuristic_shorten(output_text, 1200)
+
+    @staticmethod
+    def _render_command_output(stdout: str, stderr: str) -> str:
+        parts: list[str] = []
+        if stdout.strip():
+            parts.append("stdout:\n" + stdout.strip())
+        if stderr.strip():
+            parts.append("stderr:\n" + stderr.strip())
+        return "\n\n".join(parts)
+
+    @staticmethod
+    def _trim_command_stream(text: str) -> str:
+        stripped = text.strip()
+        if not stripped:
+            return ""
+        if len(stripped) <= COMMAND_OUTPUT_FEEDBACK_CHARS:
+            return stripped
+        return "[trimmed to tail]\n" + stripped[-COMMAND_OUTPUT_FEEDBACK_CHARS:]
+
+    @staticmethod
+    def _heuristic_shorten(text: str, limit: int) -> str:
+        compact = " ".join(text.split())
+        if len(compact) <= limit:
+            return compact
+        return compact[: limit - 3] + "..."
 
     def _handle_repeated_loop(
         self,

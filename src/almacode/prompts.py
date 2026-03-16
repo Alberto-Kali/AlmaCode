@@ -148,6 +148,40 @@ def build_research_summary_prompt(task: str, notes: str) -> str:
     ).strip()
 
 
+def build_command_output_summary_prompt(
+    *,
+    command: str,
+    exit_code: int | str,
+    cwd: str,
+    output_text: str,
+    output_truncated: bool,
+) -> str:
+    truncation_note = (
+        "Only the last 4k characters of the original command output are shown here because the full output was too large."
+        if output_truncated
+        else "The full command output is shown here."
+    )
+    return dedent(
+        f"""
+        Summarize this command result for a coding agent so it can continue without carrying huge logs in context.
+
+        Command: {command}
+        cwd: {cwd}
+        exit_code: {exit_code}
+        {truncation_note}
+
+        Output:
+        {output_text}
+
+        Return concise plain text with:
+        - outcome
+        - important findings
+        - errors or warnings that matter
+        - next action hint if obvious
+        """
+    ).strip()
+
+
 def build_tool_feedback(tool_name: str, payload: str) -> str:
     if tool_name == "run_command":
         command_feedback = _format_run_command_feedback(payload)
@@ -195,12 +229,20 @@ def _format_run_command_feedback(payload: str) -> str:
     else:
         lines.append("interpretation: the command failed and needs follow-up")
 
+    output_summary = str(command_result.get("output_summary", "")).strip()
+    if output_summary:
+        lines.append("output_summary:")
+        lines.append(output_summary)
+        if command_result.get("output_truncated"):
+            lines.append(
+                f"output_note: summarized from the last {command_result.get('output_window_chars', 0)} chars "
+                f"of {command_result.get('output_original_chars', 0)} total chars"
+            )
+
     lines.append("stdout:")
     lines.append(stdout or "[empty]")
     lines.append("stderr:")
     lines.append(stderr or "[empty]")
-    lines.append("raw_json:")
-    lines.append(payload)
     return "\n".join(lines)
 
 

@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -110,3 +111,61 @@ def test_agent_emits_tool_start_and_result(tmp_path: Path) -> None:
     assert "Read hello.txt successfully" in answer
     assert any(kind == "tool_start" and "read_file" in message for kind, message in events)
     assert any(kind == "tool" and "read_file" in message for kind, message in events)
+
+
+class _SummaryBackend:
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    def summarize(self, messages: list[dict[str, object]], max_tokens: int) -> str:
+        self.prompts.append(str(messages[-1]["content"]))
+        return "compact command summary"
+
+
+def test_command_result_is_summarized_for_context(tmp_path: Path) -> None:
+    agent = CodingAgent(
+        config=AgentConfig(workspace=tmp_path, server_url="http://127.0.0.1:8080"),
+        backend=_SummaryBackend(),  # type: ignore[arg-type]
+        tools=WorkspaceTools(root=tmp_path, default_timeout=5),
+        console=Console(record=True),
+    )
+    raw_result = json.dumps(
+        {
+            "command": "pytest -q",
+            "cwd": ".",
+            "exit_code": 0,
+            "stdout": "line one\nline two",
+            "stderr": "",
+        }
+    )
+    compacted = agent._compact_command_result(raw_result)
+    payload = json.loads(compacted)
+    assert payload["output_summary"] == "compact command summary"
+    assert payload["output_truncated"] is False
+
+
+def test_command_result_trims_to_4k_tail_before_summary(tmp_path: Path) -> None:
+    backend = _SummaryBackend()
+    agent = CodingAgent(
+        config=AgentConfig(workspace=tmp_path, server_url="http://127.0.0.1:8080"),
+        backend=backend,  # type: ignore[arg-type]
+        tools=WorkspaceTools(root=tmp_path, default_timeout=5),
+        console=Console(record=True),
+    )
+    long_stdout = "A" * 5000 + "TAIL"
+    raw_result = json.dumps(
+        {
+            "command": "pytest -q",
+            "cwd": ".",
+            "exit_code": 1,
+            "stdout": long_stdout,
+            "stderr": "",
+        }
+    )
+    compacted = agent._compact_command_result(raw_result)
+    payload = json.loads(compacted)
+    assert payload["output_truncated"] is True
+    assert payload["output_window_chars"] <= 4000
+    assert payload["stdout"].startswith("[trimmed to tail]")
+    assert backend.prompts
+    assert "TAIL" in backend.prompts[-1]
