@@ -46,6 +46,9 @@ def test_agent_recovers_from_context_overflow(tmp_path: Path) -> None:
 
 
 class _RepeatingBackend:
+    def __init__(self) -> None:
+        self.summary_calls = 0
+
     def complete(self, messages: list[dict[str, object]]) -> LLMResponse:
         return LLMResponse(
             content='{"thought":"inspect again","action":{"tool":"list_dir","args":{"path":"."}}}',
@@ -53,18 +56,24 @@ class _RepeatingBackend:
         )
 
     def summarize(self, messages: list[dict[str, object]], max_tokens: int) -> str:
+        self.summary_calls += 1
         return "summary"
 
 
 def test_agent_breaks_repeated_step_loop(tmp_path: Path) -> None:
+    backend = _RepeatingBackend()
+    session = AgentSession()
     agent = CodingAgent(
         config=AgentConfig(workspace=tmp_path, server_url="http://127.0.0.1:8080", max_steps=5),
-        backend=_RepeatingBackend(),  # type: ignore[arg-type]
+        backend=backend,  # type: ignore[arg-type]
         tools=WorkspaceTools(root=tmp_path, default_timeout=5),
         console=Console(record=True),
     )
     with pytest.raises(StepLimitReachedError):
-        agent.run("loop please", session=AgentSession())
+        agent.run("loop please", session=session)
+    assert backend.summary_calls >= 1
+    assert session.summary == "summary"
+    assert any("Loop detected" in str(message["content"]) for message in session.recent_history)
 
 
 class _ToolStartBackend:

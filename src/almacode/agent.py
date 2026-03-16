@@ -205,18 +205,17 @@ class CodingAgent:
                 last_action_fingerprint = action_fingerprint
 
             if repeated_action_count >= 2:
-                active_session.append_message({"role": "assistant", "content": response.content})
-                active_session.append_message(
-                    {
-                        "role": "user",
-                        "content": (
-                            "You are repeating the same step without making progress. "
-                            "Do not repeat the same action again. Either use a different tool, "
-                            "summarize what is done, or return final_answer with the current state and blockers."
-                        ),
-                    }
+                self._handle_repeated_loop(
+                    session=active_session,
+                    response_content=response.content,
+                    system_prompt=system_prompt,
+                    task=task,
+                    user_message=user_message,
+                    loop_tool=action.tool,
+                    loop_thought=action.thought,
                 )
-                self._emit("status", "Detected repeated step loop. Asking the model to change strategy.")
+                repeated_action_count = 0
+                last_action_fingerprint = None
                 continue
 
             if action.tool == "final_answer":
@@ -243,6 +242,41 @@ class CodingAgent:
         raise StepLimitReachedError(
             f"Step limit reached ({self._config.max_steps}) before the model produced final_answer."
         )
+
+    def _handle_repeated_loop(
+        self,
+        session: AgentSession,
+        response_content: str,
+        system_prompt: str,
+        task: str,
+        user_message: dict[str, Any],
+        loop_tool: str,
+        loop_thought: str,
+    ) -> None:
+        session.append_message({"role": "assistant", "content": response_content})
+        self._emit("status", "Detected repeated step loop. Compacting context and resetting strategy.")
+        loop_notice = (
+            "Loop detected: you repeated the same step at least three times without meaningful progress. "
+            f"Repeated tool: {loop_tool}. "
+            f"Repeated thought: {loop_thought or '[empty]'}. "
+            "The previous context was compacted. Continue from the summary below, do not repeat that step again, "
+            "and either pick a different concrete action or return final_answer if the task is complete or blocked."
+        )
+        try:
+            session.compact(
+                backend=self._backend,
+                workspace=str(self._config.workspace),
+                system_prompt=system_prompt,
+                current_task=task,
+                summary_max_tokens=self._config.summary_max_tokens,
+                history_tail_messages=max(4, self._config.history_tail_messages),
+            )
+        except ModelLoadError:
+            session.hard_reset(current_task=task, history_tail_messages=4)
+            self._emit("status", "Loop compaction failed. Falling back to a minimal session memory.")
+        self._ensure_current_prompt_at_end(session, user_message)
+        session.append_message({"role": "user", "content": loop_notice})
+        self._emit("context", session.summary or "[empty summary]")
 
     def _compact_if_needed(
         self,
