@@ -17,6 +17,9 @@ def build_system_prompt(workspace: str, command_timeout: int, system_note: str =
         Prefer inspecting files before editing them.
         Keep tool requests focused and incremental.
         Shell commands are limited to the workspace and use a timeout of {command_timeout} seconds unless you request a lower timeout.
+        Each run_command call starts a fresh shell process. Shell state does not persist across separate tool calls.
+        If you need a virtual environment, either do activation and installation in one command or call its python/pip explicitly.
+        Always read the full tool result before retrying a command, especially stdout, stderr, exit_code, and any detected virtual_env path.
 
         Reply with JSON only. Do not wrap the JSON in Markdown.
         Use this schema:

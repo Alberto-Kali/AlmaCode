@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 from rich.console import Console
@@ -126,6 +127,80 @@ def run_once(agent: CodingAgent, task: str, session: AgentSession | None = None,
     return agent.run(task, session=session, image_refs=image_refs)
 
 
+def _extract_tool_result_payload(message: str) -> tuple[str, str]:
+    marker = "\nresult:\n"
+    if marker not in message:
+        return message, ""
+    header, payload = message.split(marker, 1)
+    return header, payload.strip()
+
+
+def format_plain_tool_event(kind: str, message: str) -> list[str]:
+    header, payload = _extract_tool_result_payload(message)
+    lines = [line for line in header.splitlines() if line.strip()]
+    field_map: dict[str, str] = {}
+    for line in lines:
+        if ": " not in line:
+            continue
+        key, value = line.split(": ", 1)
+        field_map[key] = value
+
+    tool = field_map.get("tool", "tool")
+    if kind == "tool_start":
+        if tool == "run_command":
+            return [
+                f"[bold yellow]Command[/bold yellow] {field_map.get('command', '')}",
+                f"[dim]cwd: {field_map.get('cwd', '.')}[/dim]",
+            ]
+        if tool in {"read_file", "write_file", "replace_in_file", "make_dir", "list_dir"}:
+            return [f"[bold yellow]{tool}[/bold yellow] {field_map.get('path', '.')}"]
+        if tool == "web_search":
+            return [f"[bold yellow]web_search[/bold yellow] {field_map.get('query', '')}"]
+        if tool == "open_url":
+            return [f"[bold yellow]open_url[/bold yellow] {field_map.get('url', '')}"]
+        return [f"[bold yellow]{tool}[/bold yellow]"]
+
+    rendered: list[str] = []
+    if tool == "run_command":
+        rendered.append(
+            f"[bold blue]Command done[/bold blue] {field_map.get('command', '')} "
+            f"(cwd={field_map.get('cwd', '.')})"
+        )
+        try:
+            payload_json = json.loads(payload)
+        except json.JSONDecodeError:
+            payload_json = {}
+        if payload_json:
+            rendered.append(f"[dim]exit_code: {payload_json.get('exit_code', '?')}[/dim]")
+            if payload_json.get("virtual_env"):
+                rendered.append(f"[dim]virtual_env: {payload_json['virtual_env']}[/dim]")
+            stdout = str(payload_json.get("stdout", "")).strip()
+            stderr = str(payload_json.get("stderr", "")).strip()
+            if stdout:
+                rendered.append("[bold]stdout:[/bold]")
+                rendered.append(stdout)
+            if stderr:
+                rendered.append("[bold]stderr:[/bold]")
+                rendered.append(stderr)
+            if not stdout and not stderr:
+                rendered.append("[dim]No stdout/stderr[/dim]")
+            return rendered
+
+    label = {
+        "read_file": "Read file",
+        "write_file": "Wrote file",
+        "replace_in_file": "Changed file",
+        "make_dir": "Created dir",
+        "list_dir": "List dir",
+        "web_search": "Web search",
+        "open_url": "Open URL",
+    }.get(tool, tool)
+    rendered.append(f"[bold blue]{label}[/bold blue]")
+    if payload:
+        rendered.append(payload)
+    return rendered
+
+
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
@@ -190,6 +265,14 @@ def main() -> int:
         console.print(answer)
 
     console.print("Interactive mode. Type /exit to quit, /image <path...> to set images, /clear-images to unset.")
+
+    def plain_event_handler(kind: str, message: str) -> None:
+        if kind not in {"tool_start", "tool"}:
+            return
+        for line in format_plain_tool_event(kind, message):
+            console.print(line)
+
+    agent._event_handler = plain_event_handler
     while True:
         prompt = Prompt.ask("[bold green]you[/bold green]")
         if prompt.strip() in {"/exit", "/quit"}:

@@ -78,3 +78,18 @@ def test_web_search_parses_results(monkeypatch: pytest.MonkeyPatch, tools: Works
     payload = tools.web_search("test", limit=2)
     assert payload["results"][0]["title"] == "Result One"
     assert payload["results"][1]["url"] == "https://example.com/two"
+
+
+def test_run_command_prefers_detected_virtualenv(tools: WorkspaceTools) -> None:
+    venv_dir = tools.resolve_path("fastapi-env")
+    bin_dir = venv_dir / "bin"
+    bin_dir.mkdir(parents=True)
+    (venv_dir / "pyvenv.cfg").write_text("home = /usr/bin\n", encoding="utf-8")
+    python_path = bin_dir / "python"
+    python_path.write_text("#!/bin/sh\nprintf 'venv-python\\n'\n", encoding="utf-8")
+    python_path.chmod(0o755)
+
+    result = tools.run_command("python", timeout=5)
+    assert result["exit_code"] == 0
+    assert result["stdout"].strip() == "venv-python"
+    assert result["virtual_env"] == str(venv_dir)

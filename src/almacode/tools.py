@@ -148,22 +148,33 @@ class WorkspaceTools:
             raise ToolError(f"cwd is not a directory: {cwd}")
 
         shell_executable = None
-        if os.name != "nt":
-            shell_executable = os.environ.get("SHELL", "/bin/bash")
+        env = self._build_command_env(resolved_cwd)
+        command_timeout = timeout or self.default_timeout
 
         try:
-            completed = subprocess.run(
-                command,
-                cwd=resolved_cwd,
-                shell=True,
-                executable=shell_executable,
-                capture_output=True,
-                text=True,
-                timeout=timeout or self.default_timeout,
-            )
+            if os.name == "nt":
+                completed = subprocess.run(
+                    command,
+                    cwd=resolved_cwd,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=command_timeout,
+                    env=env,
+                )
+            else:
+                shell_executable = os.environ.get("SHELL", "/bin/bash")
+                completed = subprocess.run(
+                    [shell_executable, "-lc", command],
+                    cwd=resolved_cwd,
+                    capture_output=True,
+                    text=True,
+                    timeout=command_timeout,
+                    env=env,
+                )
         except subprocess.TimeoutExpired as exc:
             raise ToolError(
-                f"Command timed out after {timeout or self.default_timeout} seconds: {command}"
+                f"Command timed out after {command_timeout} seconds: {command}"
             ) from exc
         return {
             "command": command,
@@ -171,7 +182,53 @@ class WorkspaceTools:
             "exit_code": completed.returncode,
             "stdout": completed.stdout[-12000:],
             "stderr": completed.stderr[-12000:],
+            "shell": shell_executable or "system-default",
+            "virtual_env": env.get("VIRTUAL_ENV"),
         }
+
+    def _build_command_env(self, cwd: Path) -> dict[str, str]:
+        env = os.environ.copy()
+        venv_path = self._find_preferred_venv(cwd)
+        if venv_path is None:
+            return env
+
+        bin_dir = venv_path / ("Scripts" if os.name == "nt" else "bin")
+        env["VIRTUAL_ENV"] = str(venv_path)
+        path_parts = [str(bin_dir)]
+        existing_path = env.get("PATH", "")
+        if existing_path:
+            path_parts.append(existing_path)
+        env["PATH"] = os.pathsep.join(path_parts)
+        return env
+
+    def _find_preferred_venv(self, cwd: Path) -> Path | None:
+        for parent in [cwd, *cwd.parents]:
+            if parent == self.root.parent:
+                break
+            for name in (".venv", "venv", "env"):
+                candidate = parent / name
+                if self._is_virtualenv(candidate):
+                    return candidate
+            child_candidates = [
+                child
+                for child in sorted(parent.iterdir(), key=lambda item: item.name.lower())
+                if child.is_dir() and self._is_virtualenv(child)
+            ]
+            if len(child_candidates) == 1:
+                return child_candidates[0]
+            if parent == self.root:
+                break
+        return None
+
+    @staticmethod
+    def _is_virtualenv(path: Path) -> bool:
+        if not path.exists() or not path.is_dir():
+            return False
+        if not (path / "pyvenv.cfg").exists():
+            return False
+        bin_dir = path / ("Scripts" if os.name == "nt" else "bin")
+        python_name = "python.exe" if os.name == "nt" else "python"
+        return (bin_dir / python_name).exists()
 
     def web_search(self, query: str, limit: int = 5) -> dict[str, Any]:
         if not query.strip():
