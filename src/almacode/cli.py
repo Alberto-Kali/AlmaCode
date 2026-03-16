@@ -162,8 +162,10 @@ def format_plain_tool_event(kind: str, message: str) -> list[str]:
 
     rendered: list[str] = []
     if tool == "run_command":
+        status_label = "Command done"
+        status_style = "bold blue"
         rendered.append(
-            f"[bold blue]Command done[/bold blue] {field_map.get('command', '')} "
+            f"[{status_style}]{status_label}[/{status_style}] {field_map.get('command', '')} "
             f"(cwd={field_map.get('cwd', '.')})"
         )
         try:
@@ -171,7 +173,12 @@ def format_plain_tool_event(kind: str, message: str) -> list[str]:
         except json.JSONDecodeError:
             payload_json = {}
         if payload_json:
-            rendered.append(f"[dim]exit_code: {payload_json.get('exit_code', '?')}[/dim]")
+            exit_code = payload_json.get("exit_code", "?")
+            if exit_code == 0:
+                rendered.append("[green]status: success[/green]")
+            else:
+                rendered.append("[red]status: failure[/red]")
+            rendered.append(f"[dim]exit_code: {exit_code}[/dim]")
             if payload_json.get("virtual_env"):
                 rendered.append(f"[dim]virtual_env: {payload_json['virtual_env']}[/dim]")
             stdout = str(payload_json.get("stdout", "")).strip()
@@ -180,6 +187,8 @@ def format_plain_tool_event(kind: str, message: str) -> list[str]:
                 rendered.append("[bold]stdout:[/bold]")
                 rendered.append(stdout)
             if stderr:
+                if exit_code == 0:
+                    rendered.append("[yellow]stderr contained warnings/notices, but the command succeeded[/yellow]")
                 rendered.append("[bold]stderr:[/bold]")
                 rendered.append(stderr)
             if not stdout and not stderr:

@@ -194,7 +194,9 @@ class AlmaCodeApp(App[None]):
             exit_code = "?"
             if '"exit_code":' in message:
                 exit_code = message.split('"exit_code":', 1)[1].split(",", 1)[0].strip()
-            return f"[b]Command done[/b] {command} (exit {exit_code})"
+            if exit_code == "0":
+                return f"[b]Command succeeded[/b] {command} (exit {exit_code})"
+            return f"[b]Command failed[/b] {command} (exit {exit_code})"
         if tool == "read_file":
             return f"[b]Read file[/b] {path}"
         if tool == "list_dir":

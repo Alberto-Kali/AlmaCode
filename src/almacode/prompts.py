@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from textwrap import dedent
 
 
@@ -20,6 +21,7 @@ def build_system_prompt(workspace: str, command_timeout: int, system_note: str =
         Each run_command call starts a fresh shell process. Shell state does not persist across separate tool calls.
         If you need a virtual environment, either do activation and installation in one command or call its python/pip explicitly.
         Always read the full tool result before retrying a command, especially stdout, stderr, exit_code, and any detected virtual_env path.
+        For run_command, treat exit_code as the source of truth. Non-empty stderr with exit_code 0 usually means warnings or notices, not a failed command.
 
         Reply with JSON only. Do not wrap the JSON in Markdown.
         Use this schema:
@@ -55,12 +57,59 @@ def build_system_prompt(workspace: str, command_timeout: int, system_note: str =
 
 
 def build_tool_feedback(tool_name: str, payload: str) -> str:
+    if tool_name == "run_command":
+        command_feedback = _format_run_command_feedback(payload)
+        return dedent(
+            f"""
+            Tool result for `{tool_name}`:
+            {command_feedback}
+            """
+        ).strip()
+
     return dedent(
         f"""
         Tool result for `{tool_name}`:
         {payload}
         """
     ).strip()
+
+
+def _format_run_command_feedback(payload: str) -> str:
+    try:
+        command_result = json.loads(payload)
+    except json.JSONDecodeError:
+        return payload
+
+    exit_code = command_result.get("exit_code", "?")
+    success = exit_code == 0
+    command = str(command_result.get("command", ""))
+    cwd = str(command_result.get("cwd", "."))
+    virtual_env = command_result.get("virtual_env")
+    stdout = str(command_result.get("stdout", "")).strip()
+    stderr = str(command_result.get("stderr", "")).strip()
+
+    lines = [
+        f"status: {'success' if success else 'failure'}",
+        f"exit_code: {exit_code}",
+        f"command: {command}",
+        f"cwd: {cwd}",
+    ]
+    if virtual_env:
+        lines.append(f"virtual_env: {virtual_env}")
+    if success:
+        lines.append("interpretation: the command completed successfully")
+        if stderr:
+            lines.append("stderr_note: stderr contains warnings/notices but the command still succeeded")
+    else:
+        lines.append("interpretation: the command failed and needs follow-up")
+
+    lines.append("stdout:")
+    lines.append(stdout or "[empty]")
+    lines.append("stderr:")
+    lines.append(stderr or "[empty]")
+    lines.append("raw_json:")
+    lines.append(payload)
+    return "\n".join(lines)
 
 
 def build_summary_prompt(
