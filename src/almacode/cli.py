@@ -39,7 +39,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional image path or URL. May be passed multiple times.",
     )
     common.add_argument("--workspace", default=".", help="Workspace root for file and shell access")
-    common.add_argument("--max-steps", type=int, default=18, help="Maximum reasoning/tool steps")
+    common.add_argument("--max-steps", type=int, default=15, help="Maximum reasoning/tool substeps per plan step")
     common.add_argument("--max-tokens", type=int, default=768, help="Max tokens per model response")
     common.add_argument("--temperature", type=float, default=0.2, help="Sampling temperature")
     common.add_argument("--top-p", type=float, default=0.95, help="Top-p sampling")
@@ -113,6 +113,7 @@ def config_from_args(args: argparse.Namespace) -> AgentConfig:
         summary_max_tokens=256,
         history_tail_messages=4,
         request_retries=2,
+        max_plan_steps=10,
     )
 
 

@@ -176,6 +176,8 @@ class AlmaCodeApp(App[None]):
                     f"Server: {self._agent._config.server_url}",
                     f"Context window: {self._agent._config.context_window}",
                     f"Soft limit ratio: {self._agent._config.context_soft_limit_ratio}",
+                    f"Plan step limit: {self._agent._config.max_plan_steps}",
+                    f"Substep limit per plan step: {self._agent._config.max_steps}",
                     f"Compactions: {self._session.compactions}",
                     f"Recent history messages: {len(self._session.recent_history)}",
                     f"Active images: {images}",

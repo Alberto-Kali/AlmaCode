@@ -83,7 +83,11 @@ def build_plan_prompt(task: str, workspace: str, research_summary: str = "") -> 
         }}
 
         Rules:
-        - 2 to 6 steps.
+        - First classify the user request:
+          - task_request: the user wants work to be done
+          - conversational: the user is greeting, thanking, or making light conversation
+        - For task_request, return 1 to 10 concrete ordered steps.
+        - For conversational, return 1 or 2 light steps such as "greet user" or "check environment, then greet user" only if useful.
         - Steps must be concrete and executable.
         - Steps should be ordered.
         - Avoid redundant inspection steps.

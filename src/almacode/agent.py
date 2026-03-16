@@ -159,13 +159,20 @@ class CodingAgent:
 
         repeated_action_count = 0
         last_action_fingerprint: tuple[str, str, str] | None = None
+        substep = 0
 
-        for step in range(1, self._config.max_steps + 1):
+        while True:
             current_step = active_session.current_step()
             if current_step is None:
                 answer = self._finalize_completed_plan(active_session, task)
                 self._emit("final", answer)
                 return answer
+            if substep >= self._config.max_steps:
+                raise StepLimitReachedError(
+                    "Substep limit reached "
+                    f"({self._config.max_steps}) for current plan step: {current_step.title}"
+                )
+            substep += 1
             step_prompt = build_step_prompt(
                 task=task,
                 step_index=active_session.active_step_index + 1,
@@ -197,7 +204,7 @@ class CodingAgent:
             except ModelLoadError:
                 raise
             if self._config.verbose:
-                self._console.print(f"[dim]Raw model output[{step}]:[/dim] {response.content}")
+                self._console.print(f"[dim]Raw model output[{substep}]:[/dim] {response.content}")
 
             try:
                 action = parse_action(response.content)
@@ -215,7 +222,11 @@ class CodingAgent:
                 continue
 
             if action.thought:
-                self._emit("thought", f"Step {step} {action.thought}")
+                self._emit(
+                    "thought",
+                    f"Plan {active_session.active_step_index + 1}/{len(active_session.plan_steps)} "
+                    f"substep {substep} {action.thought}",
+                )
 
             action_fingerprint = (
                 action.tool,
@@ -253,6 +264,9 @@ class CodingAgent:
                 self._emit("status", f"Completed plan step: {current_step.title}")
                 self._emit("context", active_session.summary or "[empty summary]")
                 self._emit("plan", active_session.render_plan())
+                repeated_action_count = 0
+                last_action_fingerprint = None
+                substep = 0
                 continue
 
             if action.tool == "final_answer":
@@ -278,10 +292,6 @@ class CodingAgent:
             active_session.append_message({"role": "user", "content": build_tool_feedback(action.tool, result)})
             active_session.record_tool(action.tool, result)
             self._emit("tool", self._format_tool_event(action.tool, action.args, result))
-
-        raise StepLimitReachedError(
-            f"Step limit reached ({self._config.max_steps}) before the model produced final_answer."
-        )
 
     def _prepare_plan(self, session: AgentSession, task: str) -> None:
         research_summary = self._research_task_background(task)
@@ -310,7 +320,7 @@ class CodingAgent:
         if not isinstance(steps, list) or not steps:
             return [{"title": task[:80], "details": "Complete the requested task directly."}]
         normalized_steps: list[dict[str, str]] = []
-        for step in steps[:6]:
+        for step in steps[: self._config.max_plan_steps]:
             if not isinstance(step, dict):
                 continue
             title = str(step.get("title", "")).strip()

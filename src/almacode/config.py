@@ -30,7 +30,8 @@ class AgentConfig:
     server_url: str
     api_key: str | None = None
     request_timeout: int = 120
-    max_steps: int = 18
+    max_steps: int = 15
+    max_plan_steps: int = 10
     temperature: float = 0.2
     top_p: float = 0.95
     max_tokens: int = 768
