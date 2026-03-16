@@ -276,10 +276,13 @@ def main() -> int:
     console.print("Interactive mode. Type /exit to quit, /image <path...> to set images, /clear-images to unset.")
 
     def plain_event_handler(kind: str, message: str) -> None:
-        if kind not in {"tool_start", "tool"}:
+        if kind in {"tool_start", "tool"}:
+            for line in format_plain_tool_event(kind, message):
+                console.print(line)
             return
-        for line in format_plain_tool_event(kind, message):
-            console.print(line)
+        if kind == "plan":
+            console.print("[bold cyan]Plan[/bold cyan]")
+            console.print(message)
 
     agent._event_handler = plain_event_handler
     while True:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from textual import on, work
 from textual.app import App, ComposeResult
-from textual.containers import Container, Horizontal
+from textual.containers import Horizontal
 from textual.widgets import Footer, Header, Input, RichLog, Static, TabbedContent, TabPane
 
 from almacode.agent import AgentRuntimeError, CodingAgent
@@ -13,8 +13,9 @@ class AlmaCodeApp(App[None]):
     CSS = """
     Screen { layout: vertical; }
     #status-bar { height: 3; padding: 0 1; }
+    #plan-bar { height: 6; padding: 0 1; }
     #composer { height: 3; }
-    RichLog, #status-view, #context-view { border: solid #666666; }
+    RichLog, #status-view, #context-view, #plan-bar { border: solid #666666; }
     """
 
     BINDINGS = [
@@ -54,6 +55,7 @@ class AlmaCodeApp(App[None]):
                 yield RichLog(id="tool-log", wrap=True, highlight=True, markup=False)
             with TabPane("Context", id="context"):
                 yield Static("", id="context-view")
+        yield Static("", id="plan-bar")
         with Horizontal(id="composer"):
             yield Input(placeholder="Ask AlmaCode to work in this workspace...", id="prompt")
         yield Footer()
@@ -132,6 +134,9 @@ class AlmaCodeApp(App[None]):
     def _handle_agent_event_main(self, kind: str, message: str) -> None:
         if kind in {"thought", "status", "final", "error"}:
             self._write_chat(f"[{kind}] {message}", group=kind)
+        if kind == "plan":
+            self.query_one("#plan-bar", Static).update(message)
+            self.query_one("#status-view", Static).update(message)
         if kind == "tool_start":
             self._write_chat(self._tool_summary_for_chat(message, started=True), group="tool")
         if kind == "tool":
@@ -174,10 +179,13 @@ class AlmaCodeApp(App[None]):
                     f"Compactions: {self._session.compactions}",
                     f"Recent history messages: {len(self._session.recent_history)}",
                     f"Active images: {images}",
+                    "",
+                    self._session.render_plan(),
                 ]
             )
         )
         self.query_one("#context-view", Static).update(self._session.summary or "[no working-memory summary yet]")
+        self.query_one("#plan-bar", Static).update(self._session.render_plan())
 
     @staticmethod
     def _tool_summary_for_chat(message: str, *, started: bool) -> str:

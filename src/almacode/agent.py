@@ -11,8 +11,14 @@ from rich.console import Console
 
 from almacode.config import AgentConfig
 from almacode.llm import ContextOverflowError, LlamaBackend, ModelLoadError
-from almacode.prompts import build_system_prompt, build_tool_feedback
-from almacode.session import AgentSession
+from almacode.prompts import (
+    build_plan_prompt,
+    build_research_summary_prompt,
+    build_step_prompt,
+    build_system_prompt,
+    build_tool_feedback,
+)
+from almacode.session import AgentSession, PlanStep
 from almacode.tools import ToolError, WorkspaceTools
 
 
@@ -145,13 +151,31 @@ class CodingAgent:
             command_timeout=self._config.command_timeout,
             system_note=self._config.system_note,
         )
-        user_message = build_user_message(task, image_refs=image_refs)
-        active_session.append_message(user_message)
+        root_user_message = build_user_message(task, image_refs=image_refs)
+        active_session.append_message(root_user_message)
+        if active_session.plan_task != task or not active_session.plan_steps:
+            self._prepare_plan(active_session, task)
+        self._emit("plan", active_session.render_plan())
 
         repeated_action_count = 0
         last_action_fingerprint: tuple[str, str, str] | None = None
 
         for step in range(1, self._config.max_steps + 1):
+            current_step = active_session.current_step()
+            if current_step is None:
+                answer = self._finalize_completed_plan(active_session, task)
+                self._emit("final", answer)
+                return answer
+            step_prompt = build_step_prompt(
+                task=task,
+                step_index=active_session.active_step_index + 1,
+                total_steps=len(active_session.plan_steps),
+                step_title=current_step.title,
+                step_details=current_step.details,
+                completed_steps=self._completed_step_lines(active_session),
+                research_summary=active_session.research_summary,
+            )
+            user_message = build_user_message(step_prompt, image_refs=image_refs)
             self._compact_if_needed(active_session, system_prompt, task, user_message)
             messages = active_session.build_messages(
                 system_prompt=system_prompt,
@@ -218,6 +242,19 @@ class CodingAgent:
                 last_action_fingerprint = None
                 continue
 
+            if action.tool == "complete_step":
+                step_summary = str(action.args.get("summary", "")).strip() or "Step completed."
+                active_session.append_message({"role": "assistant", "content": response.content})
+                active_session.complete_current_step(step_summary)
+                active_session.compact_completed_step(
+                    task=task,
+                    history_tail_messages=max(2, self._config.history_tail_messages // 2),
+                )
+                self._emit("status", f"Completed plan step: {current_step.title}")
+                self._emit("context", active_session.summary or "[empty summary]")
+                self._emit("plan", active_session.render_plan())
+                continue
+
             if action.tool == "final_answer":
                 answer = str(action.args.get("answer", "")).strip()
                 if not answer:
@@ -233,6 +270,9 @@ class CodingAgent:
                 result = f"Tool error: {exc}"
             except Exception as exc:  # noqa: BLE001
                 result = f"Unexpected tool failure: {exc}"
+            research_note = self._research_from_failure(task, current_step, action.tool, action.args, result)
+            if research_note:
+                result = f"{result}\n\nResearch note:\n{research_note}"
 
             active_session.append_message({"role": "assistant", "content": response.content})
             active_session.append_message({"role": "user", "content": build_tool_feedback(action.tool, result)})
@@ -242,6 +282,160 @@ class CodingAgent:
         raise StepLimitReachedError(
             f"Step limit reached ({self._config.max_steps}) before the model produced final_answer."
         )
+
+    def _prepare_plan(self, session: AgentSession, task: str) -> None:
+        research_summary = self._research_task_background(task)
+        plan_prompt = build_plan_prompt(task, str(self._config.workspace), research_summary)
+        normalized_steps = self._request_plan_steps(plan_prompt, task)
+        if not normalized_steps:
+            raise AgentRuntimeError("Planner returned empty step titles.")
+        session.set_plan(task=task, steps=normalized_steps, research_summary=research_summary)
+        self._emit("status", f"Prepared a {len(normalized_steps)}-step plan.")
+
+    def _request_plan_steps(self, plan_prompt: str, task: str) -> list[dict[str, str]]:
+        if not hasattr(self._backend, "chat"):
+            return [{"title": task[:80], "details": "Complete the requested task directly."}]
+        response = self._backend.chat(
+            [
+                {"role": "system", "content": "Return only valid JSON with a short plan."},
+                {"role": "user", "content": plan_prompt},
+            ],
+            response_format={"type": "json_object"},
+        )
+        try:
+            payload = json.loads(response.content)
+        except json.JSONDecodeError as exc:
+            raise AgentRuntimeError(f"Planner returned invalid JSON: {response.content}") from exc
+        steps = payload.get("steps", [])
+        if not isinstance(steps, list) or not steps:
+            return [{"title": task[:80], "details": "Complete the requested task directly."}]
+        normalized_steps: list[dict[str, str]] = []
+        for step in steps[:6]:
+            if not isinstance(step, dict):
+                continue
+            title = str(step.get("title", "")).strip()
+            if not title:
+                continue
+            normalized_steps.append({"title": title, "details": str(step.get("details", "")).strip()})
+        return normalized_steps
+
+    def _research_task_background(self, task: str) -> str:
+        queries = self._build_research_queries(task)
+        if not queries:
+            return ""
+        notes: list[str] = []
+        for query in queries[:2]:
+            try:
+                search_payload = json.loads(self._tools.execute("web_search", {"query": query, "limit": 3}))
+            except Exception:  # noqa: BLE001
+                continue
+            results = search_payload.get("results", [])
+            if not isinstance(results, list) or not results:
+                continue
+            notes.append(f"Query: {query}")
+            for result in results[:2]:
+                if not isinstance(result, dict):
+                    continue
+                title = str(result.get("title", "")).strip()
+                url = str(result.get("url", "")).strip()
+                if not url:
+                    continue
+                notes.append(f"- {title} ({url})")
+                try:
+                    opened = json.loads(self._tools.execute("open_url", {"url": url, "max_chars": 4000}))
+                except Exception:  # noqa: BLE001
+                    continue
+                notes.append(str(opened.get("text", ""))[:1200])
+        if not notes:
+            return ""
+        prompt = build_research_summary_prompt(task, "\n".join(notes))
+        summary = self._backend.summarize(
+            [
+                {"role": "system", "content": "Return only a concise research summary."},
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=min(220, self._config.summary_max_tokens),
+        )
+        self._emit("status", "Prepared research notes for the task.")
+        return summary.strip()
+
+    @staticmethod
+    def _build_research_queries(task: str) -> list[str]:
+        lowered = task.lower()
+        need_research = any(
+            token in lowered
+            for token in [
+                "error",
+                "traceback",
+                "exception",
+                "tutorial",
+                "install",
+                "setup",
+                "fastapi",
+                "django",
+                "react",
+                "nextjs",
+                "cuda",
+                "llama",
+            ]
+        )
+        if not need_research:
+            return []
+        return [task, f"{task} tutorial", f"{task} fix"][:3]
+
+    def _research_from_failure(
+        self,
+        task: str,
+        current_step: PlanStep,
+        tool_name: str,
+        args: dict[str, Any],
+        result: str,
+    ) -> str:
+        if tool_name != "run_command":
+            return ""
+        try:
+            payload = json.loads(result)
+        except json.JSONDecodeError:
+            return ""
+        if payload.get("exit_code", 0) == 0:
+            return ""
+        stderr = str(payload.get("stderr", "")).strip()
+        stdout = str(payload.get("stdout", "")).strip()
+        error_snippet = stderr or stdout
+        if not error_snippet:
+            return ""
+        query = f"{args.get('command', '')} {error_snippet[:220]}"
+        try:
+            search_payload = json.loads(self._tools.execute("web_search", {"query": query, "limit": 3}))
+        except Exception:  # noqa: BLE001
+            return ""
+        results = search_payload.get("results", [])
+        if not isinstance(results, list) or not results:
+            return ""
+        note_lines = [f"Failure research for step '{current_step.title}':", f"Query: {query}"]
+        for result_entry in results[:2]:
+            if isinstance(result_entry, dict):
+                note_lines.append(f"- {result_entry.get('title', '')}: {result_entry.get('url', '')}")
+        self._emit("status", "Searched the web for the recent command failure.")
+        return "\n".join(note_lines)
+
+    @staticmethod
+    def _completed_step_lines(session: AgentSession) -> list[str]:
+        lines: list[str] = []
+        for index, step in enumerate(session.plan_steps, start=1):
+            if step.status == "completed":
+                summary = f" - {step.summary}" if step.summary else ""
+                lines.append(f"{index}. {step.title}{summary}")
+        return lines
+
+    def _finalize_completed_plan(self, session: AgentSession, task: str) -> str:
+        lines = [f"Completed task: {task}", "", "Plan progress:"]
+        for index, step in enumerate(session.plan_steps, start=1):
+            summary = step.summary or step.status
+            lines.append(f"{index}. {step.title} -> {summary}")
+        if session.research_summary:
+            lines.extend(["", "Research summary:", session.research_summary])
+        return "\n".join(lines).strip()
 
     def _handle_repeated_loop(
         self,

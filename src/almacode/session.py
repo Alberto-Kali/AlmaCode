@@ -34,12 +34,24 @@ class SessionEvent:
 
 
 @dataclass(slots=True)
+class PlanStep:
+    title: str
+    details: str = ""
+    status: str = "pending"
+    summary: str = ""
+
+
+@dataclass(slots=True)
 class AgentSession:
     summary: str = ""
     recent_history: list[dict[str, Any]] = field(default_factory=list)
     tool_log: list[str] = field(default_factory=list)
     compactions: int = 0
     last_user_task: str = ""
+    plan_task: str = ""
+    plan_steps: list[PlanStep] = field(default_factory=list)
+    active_step_index: int = 0
+    research_summary: str = ""
 
     def append_message(self, message: dict[str, Any]) -> None:
         self.recent_history.append(message)
@@ -118,3 +130,68 @@ class AgentSession:
         self.summary = "\n".join(parts)[-3000:]
         self.recent_history = self.recent_history[-history_tail_messages:] if history_tail_messages > 0 else []
         self.last_user_task = current_task
+
+    def set_plan(self, *, task: str, steps: list[dict[str, str]], research_summary: str = "") -> None:
+        self.plan_task = task
+        self.plan_steps = [
+            PlanStep(title=step.get("title", "").strip() or f"Step {index}", details=step.get("details", "").strip())
+            for index, step in enumerate(steps, start=1)
+        ]
+        if self.plan_steps:
+            self.plan_steps[0].status = "in_progress"
+        self.active_step_index = 0
+        self.research_summary = research_summary.strip()
+
+    def current_step(self) -> PlanStep | None:
+        if not self.plan_steps:
+            return None
+        if self.active_step_index >= len(self.plan_steps):
+            return None
+        return self.plan_steps[self.active_step_index]
+
+    def plan_complete(self) -> bool:
+        return bool(self.plan_steps) and self.active_step_index >= len(self.plan_steps)
+
+    def complete_current_step(self, summary: str) -> None:
+        current = self.current_step()
+        if current is None:
+            return
+        current.status = "completed"
+        current.summary = summary.strip()
+        self.active_step_index += 1
+        next_step = self.current_step()
+        if next_step is not None:
+            next_step.status = "in_progress"
+
+    def block_current_step(self, summary: str) -> None:
+        current = self.current_step()
+        if current is None:
+            return
+        current.status = "blocked"
+        current.summary = summary.strip()
+
+    def compact_completed_step(self, *, task: str, history_tail_messages: int) -> None:
+        completed = [step for step in self.plan_steps if step.status == "completed" and step.summary]
+        if not completed:
+            return
+        step_lines = [f"- {step.title}: {step.summary}" for step in completed[-6:]]
+        parts = [part for part in [self.summary.strip(), f"Current task: {task}", "Completed plan steps:", "\n".join(step_lines)] if part]
+        self.summary = "\n".join(parts)[-4000:]
+        self.recent_history = self.recent_history[-history_tail_messages:] if history_tail_messages > 0 else []
+        self.compactions += 1
+
+    def render_plan(self) -> str:
+        if not self.plan_steps:
+            return "Plan: [not prepared yet]"
+        lines = [f"Task: {self.plan_task or self.last_user_task}"]
+        if self.research_summary:
+            lines.append(f"Research: {self.research_summary[:220]}")
+        for index, step in enumerate(self.plan_steps, start=1):
+            marker = {
+                "completed": "[x]",
+                "in_progress": "[>]",
+                "blocked": "[!]",
+            }.get(step.status, "[ ]")
+            detail = f" - {step.details}" if step.details else ""
+            lines.append(f"{marker} {index}. {step.title}{detail}")
+        return "\n".join(lines)

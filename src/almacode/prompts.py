@@ -34,7 +34,7 @@ def build_system_prompt(workspace: str, command_timeout: int, system_note: str =
         {{
           "thought": "one short sentence about what you are doing",
           "action": {{
-            "tool": "list_dir | read_file | write_file | replace_in_file | make_dir | run_command | web_search | open_url | final_answer",
+            "tool": "list_dir | read_file | write_file | replace_in_file | make_dir | run_command | web_search | open_url | complete_step | final_answer",
             "args": {{
               "...": "tool-specific arguments"
             }}
@@ -50,6 +50,7 @@ def build_system_prompt(workspace: str, command_timeout: int, system_note: str =
         - run_command args: {{"command": "pytest -q", "cwd": ".", "timeout": 60}}
         - web_search args: {{"query": "latest python packaging guide", "limit": 5}}
         - open_url args: {{"url": "https://example.com", "max_chars": 12000}}
+        - complete_step args: {{"summary": "what was finished for the current plan step"}}
         - final_answer args: {{"answer": "what you completed, what changed, and any important caveats"}}
 
         Rules:
@@ -58,6 +59,87 @@ def build_system_prompt(workspace: str, command_timeout: int, system_note: str =
         - When a tool fails, inspect the result and recover.
         - If you edit a file, prefer reading it first unless it does not exist yet.
         {note_block}
+        """
+    ).strip()
+
+
+def build_plan_prompt(task: str, workspace: str, research_summary: str = "") -> str:
+    research_block = research_summary.strip() or "[none]"
+    return dedent(
+        f"""
+        Break the user task into a short execution plan for a local coding agent.
+
+        Workspace: {workspace}
+        Task: {task}
+        Research summary:
+        {research_block}
+
+        Return JSON only with this schema:
+        {{
+          "steps": [
+            {{"title": "short step title", "details": "one sentence"}},
+            {{"title": "short step title", "details": "one sentence"}}
+          ]
+        }}
+
+        Rules:
+        - 2 to 6 steps.
+        - Steps must be concrete and executable.
+        - Steps should be ordered.
+        - Avoid redundant inspection steps.
+        - If setup is needed, include it as one step.
+        """
+    ).strip()
+
+
+def build_step_prompt(
+    *,
+    task: str,
+    step_index: int,
+    total_steps: int,
+    step_title: str,
+    step_details: str,
+    completed_steps: list[str],
+    research_summary: str,
+) -> str:
+    completed_block = "\n".join(completed_steps) if completed_steps else "[none]"
+    research_block = research_summary.strip() or "[none]"
+    return dedent(
+        f"""
+        Overall task: {task}
+        Current plan step: {step_index}/{total_steps}
+        Step title: {step_title}
+        Step details: {step_details or '[none]'}
+
+        Completed plan steps:
+        {completed_block}
+
+        Research summary:
+        {research_block}
+
+        Work only on the current plan step.
+        Use tools if needed.
+        When this step is complete, respond with tool=complete_step and a short summary.
+        Do not return final_answer until all plan steps are complete or the task is blocked.
+        """
+    ).strip()
+
+
+def build_research_summary_prompt(task: str, notes: str) -> str:
+    return dedent(
+        f"""
+        Summarize the external research notes for a coding agent.
+
+        Task:
+        {task}
+
+        Notes:
+        {notes}
+
+        Return a concise plain-text summary with:
+        - useful facts
+        - likely solution direction
+        - warnings or caveats
         """
     ).strip()
 

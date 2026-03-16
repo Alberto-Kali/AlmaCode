@@ -77,14 +77,18 @@ def test_agent_breaks_repeated_step_loop(tmp_path: Path) -> None:
 
 
 class _ToolStartBackend:
+    def __init__(self) -> None:
+        self.calls = 0
+
     def complete(self, messages: list[dict[str, object]]) -> LLMResponse:
-        if len(messages) < 3:
+        self.calls += 1
+        if self.calls == 1:
             return LLMResponse(
                 content='{"thought":"inspect file","action":{"tool":"read_file","args":{"path":"hello.txt"}}}',
                 raw={},
             )
         return LLMResponse(
-            content='{"thought":"done","action":{"tool":"final_answer","args":{"answer":"ok"}}}',
+            content='{"thought":"done","action":{"tool":"complete_step","args":{"summary":"Read hello.txt successfully"}}}',
             raw={},
         )
 
@@ -103,6 +107,6 @@ def test_agent_emits_tool_start_and_result(tmp_path: Path) -> None:
         event_handler=lambda kind, message: events.append((kind, message)),
     )
     answer = agent.run("read the file", session=AgentSession())
-    assert answer == "ok"
+    assert "Read hello.txt successfully" in answer
     assert any(kind == "tool_start" and "read_file" in message for kind, message in events)
     assert any(kind == "tool" and "read_file" in message for kind, message in events)
