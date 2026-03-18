@@ -216,3 +216,7 @@ python scripts/build_server_package.py
 - `text-generation-webui` `llama_cpp_server.py` for `llama-server` launch/config ideas
 - `llama.cpp` official repository for `llama-server`
 - GitHub Docs for protected branches and required status checks
+
+## License
+
+- This product created and published by Alberto Genuardy (MIT)
